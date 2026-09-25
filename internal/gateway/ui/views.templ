@@ -22,10 +22,12 @@ templ Desktop() {
 					--bg: #eceae6; --win: #fbfaf8; --text: #1c1b19; --muted: #7a766f; --line: #dedad3; --soft: #f1efeb;
 					--ok: #2f9e5b; --warn: #d4870b; --bad: #d64534; --idle: #d7d3cc; --accent: #1c1b19;
 					--shadow: 0 1px 2px rgba(0,0,0,.06), 0 12px 32px rgba(0,0,0,.10);
+					--wallpaper: url(/static/wallpaper-light.svg);
 				}
 				:root[data-theme="light"] { color-scheme: light; }
 				@media (prefers-color-scheme: dark) {
 					:root:not([data-theme="light"]) {
+						--wallpaper: url(/static/wallpaper-dark.svg);
 						--bg: #121212; --win: #1c1c1c; --text: #ecebe8; --muted: #8d8a84; --line: #2c2c2c; --soft: #242424;
 						--ok: #46c07a; --warn: #f0a531; --bad: #f0634f; --idle: #333; --accent: #ecebe8;
 						--shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.5);
@@ -33,13 +35,11 @@ templ Desktop() {
 				}
 				:root[data-theme="dark"] {
 					color-scheme: dark;
+					--wallpaper: url(/static/wallpaper-dark.svg);
 					--bg: #121212; --win: #1c1c1c; --text: #ecebe8; --muted: #8d8a84; --line: #2c2c2c; --soft: #242424;
 					--ok: #46c07a; --warn: #f0a531; --bad: #f0634f; --idle: #333; --accent: #ecebe8;
 					--shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.5);
 				}
-				.theme { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
-				.theme button { border: 0; background: transparent; padding: 2px 9px; font-size: 11px; cursor: pointer; color: var(--muted); }
-				.theme button[aria-pressed="true"] { background: var(--text); color: var(--win); }
 				.deck { height: 100%; display: flex; flex-direction: column; gap: 14px; }
 				.slide { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 				.slide h1 { font-size: 26px; line-height: 1.2; margin: 0; letter-spacing: -.01em; }
@@ -75,7 +75,7 @@ templ Desktop() {
 				.deck-nav { display: flex; align-items: center; gap: 8px; flex: none; }
 				.deck-nav .bar { flex: 1; height: 3px; background: var(--soft); border-radius: 2px; overflow: hidden; }
 				.deck-nav .bar i { display: block; height: 100%; background: var(--text); }
-				.win:fullscreen { border-radius: 0; resize: none; }
+				.win:fullscreen { border-radius: 0; }
 				.win:fullscreen .win-body { padding: 5vh 8vw; }
 				.win:fullscreen .slide { font-size: 1.3em; }
 				.win:fullscreen .slide h1 { font-size: 40px; }
@@ -84,28 +84,86 @@ templ Desktop() {
 				.win:fullscreen blockquote p { font-size: 22px !important; }
 				* { box-sizing: border-box; }
 				html, body { height: 100%; margin: 0; }
-				body { background: var(--bg); color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; overflow: hidden; }
+				body { background: var(--bg) var(--wallpaper) center / cover no-repeat fixed; color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; overflow: hidden; }
 				button, input, select { font: inherit; color: inherit; }
-				#bar { position: fixed; inset: 0 0 auto 0; height: 32px; display: flex; align-items: center; gap: 16px; padding: 0 14px; background: var(--win); border-bottom: 1px solid var(--line); z-index: 100000; }
-				#bar .brand { font-weight: 650; letter-spacing: .02em; }
+				#bar { position: fixed; inset: 0 0 auto 0; height: 30px; display: flex; align-items: center; gap: 4px; padding: 0 10px; z-index: 100000;
+					background: color-mix(in srgb, var(--win) 72%, transparent); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+					border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); font-size: 13px; }
+				#bar .item { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 5px; white-space: nowrap; }
+				#bar .logo { width: 16px; height: 16px; border-radius: 4px; background: var(--text); color: var(--win); display: grid; place-items: center; font-size: 10px; font-weight: 800; }
+				#bar .app { font-weight: 700; }
+				#bar .hint { color: var(--muted); }
 				#bar .spacer { flex: 1; }
-				#bar .muted, .muted { color: var(--muted); }
-				.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; }
-				.dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); } .dot.idle { background: var(--idle); }
-				#desk { position: fixed; inset: 32px 0 64px 0; }
-				#dock { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; gap: 6px; padding: 6px; background: var(--win); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); z-index: 100000; }
-				#dock button { border: 0; background: transparent; border-radius: 10px; padding: 6px 12px; cursor: pointer; display: grid; justify-items: center; gap: 2px; }
-				#dock button:hover { background: var(--soft); }
-				#dock .ico { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; font-weight: 700; font-size: 12px; background: var(--text); color: var(--win); }
-				#dock span:last-child { font-size: 11px; color: var(--muted); }
-				.win { position: absolute; display: flex; flex-direction: column; min-width: 280px; min-height: 180px; max-width: 100%; max-height: 100%; background: var(--win); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); resize: both; overflow: hidden; }
-				.win.active { border-color: var(--muted); }
-				.win-bar { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); cursor: grab; user-select: none; flex: none; }
-				.win-bar:active { cursor: grabbing; }
-				.win-title { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-				.win-x { border: 0; background: transparent; width: 24px; height: 24px; border-radius: 6px; cursor: pointer; color: var(--muted); font-size: 16px; line-height: 1; }
-				.win-x:hover { background: var(--soft); color: var(--text); }
-				.win-body { flex: 1; overflow: auto; padding: 14px; }
+				#bar .status { font-size: 12px; }
+				#bar .status .muted { font-size: 12px; }
+				.muted { color: var(--muted); }
+				.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 22%, transparent); }
+				.dot.warn { background: var(--warn); box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 22%, transparent); }
+				.dot.bad { background: var(--bad); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bad) 22%, transparent); }
+				.dot.idle { background: var(--idle); box-shadow: none; }
+				.theme { display: inline-flex; gap: 1px; padding: 2px; border-radius: 7px; background: color-mix(in srgb, var(--text) 7%, transparent); }
+				.theme button { border: 0; background: transparent; width: 24px; height: 18px; border-radius: 5px; cursor: pointer; color: var(--muted); display: grid; place-items: center; padding: 0; }
+				.theme button svg { width: 12px; height: 12px; }
+				.theme button[aria-pressed="true"] { background: var(--win); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+				#clock { font-variant-numeric: tabular-nums; }
+				#desk { position: fixed; inset: 30px 0 84px 0; }
+				#dock { position: fixed; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex; align-items: flex-end; gap: 4px; padding: 5px 6px; z-index: 100000;
+					background: color-mix(in srgb, var(--win) 60%, transparent); backdrop-filter: saturate(180%) blur(24px); -webkit-backdrop-filter: saturate(180%) blur(24px);
+					border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); border-radius: 18px; box-shadow: var(--shadow); }
+				#dock button { position: relative; border: 0; background: transparent; padding: 0 3px 7px; cursor: pointer; }
+				#dock .ico { width: 46px; height: 46px; border-radius: 11px; display: grid; place-items: center; color: #fff; transition: transform .15s ease; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12), 0 2px 6px rgba(0,0,0,.18); }
+				#dock .ico svg { width: 24px; height: 24px; }
+				#dock button:hover .ico { transform: translateY(-5px) scale(1.08); }
+				#dock .d-files .ico { background: linear-gradient(160deg, #5aa9ff, #1f6fe5); }
+				#dock .d-stats .ico { background: linear-gradient(160deg, #4cd98a, #179a55); }
+				#dock .d-connect .ico { background: linear-gradient(160deg, #4a4a4f, #1d1d20); }
+				#dock .d-present .ico { background: linear-gradient(160deg, #ffb347, #f06a1f); }
+				#dock .doc .ico { background: linear-gradient(160deg, #c6c6cc, #8e8e96); font-size: 11px; font-weight: 700; }
+				#dock .tip { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); padding: 3px 9px; border-radius: 6px; font-size: 12px; white-space: nowrap;
+					background: var(--win); border: 1px solid var(--line); box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .12s; }
+				#dock button:hover .tip { opacity: 1; }
+				#dock .run { position: absolute; bottom: 1px; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: var(--text); opacity: 0; }
+				#dock button.running .run { opacity: .7; }
+				#dock .sep { width: 1px; align-self: stretch; margin: 4px 4px 10px; background: var(--line); }
+				#dock .sep:last-child { display: none; }
+				.win { position: absolute; display: flex; flex-direction: column; min-width: 320px; min-height: 200px; background: var(--win); border-radius: 12px;
+					border: 1px solid color-mix(in srgb, var(--line) 90%, transparent); box-shadow: var(--shadow);
+					transition: opacity .18s ease, transform .18s ease; transform-origin: 50% 100%; }
+				.win:not(.active) { box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 6px 18px rgba(0,0,0,.07); }
+				.win.min { opacity: 0; transform: translateY(40vh) scale(.2); pointer-events: none; }
+				.win.max { border-radius: 0; }
+				.win.moving { transition: none; }
+				.win-bar { position: relative; display: flex; align-items: center; height: 38px; padding: 0 12px; flex: none; user-select: none; border-bottom: 1px solid var(--line); border-radius: 12px 12px 0 0; }
+				.win.max .win-bar { border-radius: 0; }
+				.win-title { position: absolute; left: 90px; right: 90px; text-align: center; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+				.win:not(.active) .win-title { color: var(--muted); }
+				.lights { display: flex; gap: 8px; z-index: 1; }
+				.lights button { width: 12px; height: 12px; padding: 0; border-radius: 50%; border: 0; cursor: default; display: grid; place-items: center; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.18); }
+				.lights svg { width: 8px; height: 8px; opacity: 0; stroke: rgba(0,0,0,.55); stroke-width: 1.6; fill: none; stroke-linecap: round; }
+				.lights:hover svg { opacity: 1; }
+				.l-close { background: #ff5f57; } .l-min { background: #febc2e; } .l-max { background: #28c840; }
+				.win:not(.active) .lights:not(:hover) button { background: var(--idle); box-shadow: none; }
+				.win-body { flex: 1; overflow: auto; padding: 14px; border-radius: 0 0 12px 12px; }
+				.win.max .win-body { border-radius: 0; }
+				.rz { position: absolute; z-index: 2; }
+				.rz.n { top: -3px; left: 8px; right: 8px; height: 6px; cursor: ns-resize; } .rz.s { bottom: -3px; left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+				.rz.e { right: -3px; top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; } .rz.w { left: -3px; top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+				.rz.ne { top: -4px; right: -4px; width: 12px; height: 12px; cursor: nesw-resize; } .rz.sw { bottom: -4px; left: -4px; width: 12px; height: 12px; cursor: nesw-resize; }
+				.rz.nw { top: -4px; left: -4px; width: 12px; height: 12px; cursor: nwse-resize; } .rz.se { bottom: -4px; right: -4px; width: 12px; height: 12px; cursor: nwse-resize; }
+				.win.max .rz { display: none; }
+				#ctx { position: fixed; z-index: 200000; min-width: 210px; padding: 5px; border-radius: 9px; font-size: 13px;
+					background: color-mix(in srgb, var(--win) 82%, transparent); backdrop-filter: saturate(180%) blur(24px); -webkit-backdrop-filter: saturate(180%) blur(24px);
+					border: 1px solid color-mix(in srgb, var(--line) 90%, transparent); box-shadow: 0 10px 30px rgba(0,0,0,.22), 0 0 0 .5px rgba(0,0,0,.08); }
+				#ctx .h { padding: 4px 10px 2px; font-size: 11px; font-weight: 600; color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+				#ctx button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 3px 10px 3px 6px; border: 0; border-radius: 5px; background: transparent; text-align: left; cursor: default; white-space: nowrap; }
+				#ctx button .chk { width: 14px; text-align: center; font-size: 11px; }
+				#ctx button:hover, #ctx button:focus-visible { background: #0a64d8; color: #fff; outline: none; }
+				#ctx button.danger { color: var(--bad); }
+				#ctx button.danger:hover { color: #fff; background: var(--bad); }
+				#ctx hr { border: 0; height: 1px; margin: 4px 6px; background: var(--line); }
+				#toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 200000; padding: 6px 14px; border-radius: 8px; font-size: 12px;
+					background: var(--text); color: var(--win); box-shadow: var(--shadow); opacity: 0; transition: opacity .2s; pointer-events: none; }
+				#toast.show { opacity: 1; }
 				.btn { border: 1px solid var(--line); background: var(--win); border-radius: 7px; padding: 4px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; }
 				.btn:hover { border-color: var(--muted); }
 				.btn.dark { background: var(--text); color: var(--win); border-color: var(--text); }
@@ -169,34 +227,57 @@ templ Desktop() {
 				.pill.down { background: var(--idle); color: var(--muted); text-decoration: line-through; }
 				pre { background: var(--soft); border-radius: 8px; padding: 10px; overflow-x: auto; font: 11px/1.6 ui-monospace, monospace; margin: 6px 0 0; }
 				@media (max-width: 700px) {
-					.win { left: 6px !important; right: 6px; width: auto !important; top: 6px !important; height: calc(100% - 12px) !important; resize: none; }
+					.win { left: 6px !important; right: 6px; width: auto !important; top: 6px !important; height: calc(100% - 12px) !important; }
+					.rz, #bar .hint { display: none; }
 				}
 			</style>
 		</head>
 		<body>
 			<div id="bar">
-				<span class="brand">Vault OS</span>
-				<span class="muted">S3-compatible, self-healing object storage</span>
+				<span class="item"><span class="logo">V</span><span class="app" id="app-name">Vault OS</span></span>
+				<span class="item hint">S3-compatible, self-healing object storage</span>
 				<span class="spacer"></span>
-				<span hx-get="/app/pulse" hx-trigger="load, every 2s"><span class="dot idle"></span></span>
-				<span class="theme" role="group" aria-label="Theme">
-					<button data-theme-set="system">System</button>
-					<button data-theme-set="light">Light</button>
-					<button data-theme-set="dark">Dark</button>
+				<span class="item status" hx-get="/app/pulse" hx-trigger="load, every 2s"><span class="dot idle"></span></span>
+				<span class="item">
+					<span class="theme" role="group" aria-label="Theme">
+						<button data-theme-set="system" title="Match system" aria-label="Match system"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"></rect><path d="M5.5 14h5M8 11.5V14"></path></svg></button>
+						<button data-theme-set="light" title="Light" aria-label="Light"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="3"></circle><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3 3l1 1M12 12l1 1M3 13l1-1M12 4l1-1"></path></svg></button>
+						<button data-theme-set="dark" title="Dark" aria-label="Dark"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 10.2A6 6 0 0 1 5.8 2.5a6 6 0 1 0 7.7 7.7Z"></path></svg></button>
+					</span>
 				</span>
-				<span id="clock" class="muted"></span>
+				<span class="item" id="clock"></span>
 			</div>
 			<div id="desk"></div>
 			<nav id="dock">
-				<button data-open="files" data-title="Files" data-url="/app/files"><span class="ico">F</span><span>Files</span></button>
-				<button data-open="stats" data-title="Stats" data-url="/app/stats"><span class="ico">S</span><span>Stats</span></button>
-				<button data-open="connect" data-title="Connect" data-url="/app/connect"><span class="ico">$</span><span>Connect</span></button>
-				<button data-open="present" data-title="Present" data-url="/app/present?n=0"><span class="ico">P</span><span>Present</span></button>
+				<button class="d-files" data-open="files" data-title="Files" data-url="/app/files" aria-label="Files">
+					<span class="ico"><svg viewBox="0 0 24 24" fill="#fff"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2h8.4A1.5 1.5 0 0 1 21 8.5V17.5A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5Z" opacity=".95"></path></svg></span><span class="tip">Files</span><span class="run"></span>
+				</button>
+				<button class="d-stats" data-open="stats" data-title="Stats" data-url="/app/stats" aria-label="Stats">
+					<span class="ico"><svg viewBox="0 0 24 24" fill="#fff"><rect x="4" y="12" width="3.5" height="7" rx="1"></rect><rect x="10.25" y="7" width="3.5" height="12" rx="1"></rect><rect x="16.5" y="4" width="3.5" height="15" rx="1"></rect></svg></span><span class="tip">Stats</span><span class="run"></span>
+				</button>
+				<button class="d-connect" data-open="connect" data-title="Connect" data-url="/app/connect" aria-label="Connect">
+					<span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 8 4 4-4 4M12.5 16H18"></path></svg></span><span class="tip">Connect</span><span class="run"></span>
+				</button>
+				<button class="d-present" data-open="present" data-title="Present" data-url="/app/present?n=0" aria-label="Present">
+					<span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="11" rx="1.5"></rect><path d="M12 15.5V20M8.5 20h7"></path></svg></span><span class="tip">Present</span><span class="run"></span>
+				</button>
+				<span class="sep"></span>
 			</nav>
+			<div id="ctx" role="menu" hidden></div>
+			<div id="toast" role="status" aria-live="polite"></div>
 			<template id="win-tpl">
 				<div class="win">
-					<div class="win-bar"><span class="win-title"></span><button class="win-x" title="Close">×</button></div>
+					<div class="win-bar">
+						<div class="lights">
+							<button class="l-close" data-win="close" title="Close" aria-label="Close"><svg viewBox="0 0 8 8"><path d="M1.5 1.5l5 5M6.5 1.5l-5 5"></path></svg></button>
+							<button class="l-min" data-win="min" title="Minimize" aria-label="Minimize"><svg viewBox="0 0 8 8"><path d="M1.2 4h5.6"></path></svg></button>
+							<button class="l-max" data-win="max" title="Zoom" aria-label="Zoom"><svg viewBox="0 0 8 8"><path d="M2 2h3.2L2 5.2Z M6 6H2.8L6 2.8Z" fill="rgba(0,0,0,.55)" stroke="none"></path></svg></button>
+						</div>
+						<span class="win-title"></span>
+					</div>
 					<div class="win-body"></div>
+					<span class="rz n" data-rz="n"></span><span class="rz s" data-rz="s"></span><span class="rz e" data-rz="e"></span><span class="rz w" data-rz="w"></span>
+					<span class="rz ne" data-rz="ne"></span><span class="rz nw" data-rz="nw"></span><span class="rz se" data-rz="se"></span><span class="rz sw" data-rz="sw"></span>
 				</div>
 			</template>
 			<script>
@@ -205,17 +286,57 @@ templ Desktop() {
 				const sizes = { files: [640, 480], stats: [560, 640], connect: [460, 340], present: [880, 600] };
 				let z = 10, cascade = 0;
 
+				const dock = document.getElementById('dock');
+				const appName = document.getElementById('app-name');
+				const wins = () => [...desk.querySelectorAll('.win')];
+
 				const focus = win => {
-					desk.querySelectorAll('.win.active').forEach(w => w.classList.remove('active'));
+					wins().forEach(w => w.classList.remove('active'));
 					win.style.zIndex = ++z;
 					win.classList.add('active');
+					appName.textContent = win.dataset.key.startsWith('view:') ? 'Files' : win.dataset.title;
+				};
+				// After a window closes or minimizes, hand focus to the topmost visible one.
+				const refocus = () => {
+					const top = wins().filter(w => !w.classList.contains('min')).sort((a, b) => b.style.zIndex - a.style.zIndex)[0];
+					if (top) focus(top); else appName.textContent = 'Vault OS';
+				};
+				// Dock state: a dot under running apps; minimized documents get their own dock tile.
+				const syncDock = () => {
+					dock.querySelectorAll('button[data-open]').forEach(b => b.classList.toggle('running', wins().some(w => w.dataset.key === b.dataset.open)));
+					dock.querySelectorAll('.doc').forEach(d => d.remove());
+					for (const w of wins()) {
+						if (!w.classList.contains('min') || dock.querySelector(`button[data-open="${CSS.escape(w.dataset.key)}"]:not(.doc)`)) continue;
+						const b = document.createElement('button');
+						b.className = 'doc';
+						b.dataset.restore = w.dataset.key;
+						b.innerHTML = '<span class="ico"></span><span class="tip"></span>';
+						b.querySelector('.ico').textContent = (w.dataset.title.split('.').pop() || 'doc').slice(0, 4).toUpperCase();
+						b.querySelector('.tip').textContent = w.dataset.title;
+						dock.appendChild(b);
+					}
+					dock.querySelector('.sep').style.display = dock.querySelector('.doc') ? 'block' : 'none';
 				};
 
+				const restore = win => { win.classList.remove('min'); focus(win); syncDock(); };
+				const minimize = win => { win.classList.add('min'); win.classList.remove('active'); refocus(); syncDock(); };
+				const toggleMax = win => {
+					if (win.classList.toggle('max')) {
+						win.dataset.geom = JSON.stringify([win.style.left, win.style.top, win.style.width, win.style.height]);
+						Object.assign(win.style, { left: '0px', top: '0px', width: desk.clientWidth + 'px', height: desk.clientHeight + 'px' });
+					} else if (win.dataset.geom) {
+						const [left, top, width, height] = JSON.parse(win.dataset.geom);
+						Object.assign(win.style, { left, top, width, height });
+					}
+				};
+				window.closeWin = el => { el.closest('.win')?.remove(); refocus(); syncDock(); };
+
 				window.openApp = (key, title, url, pos) => {
-					let win = [...desk.children].find(w => w.dataset.key === key);
-					if (win) return focus(win);
+					let win = wins().find(w => w.dataset.key === key);
+					if (win) return restore(win);
 					win = document.getElementById('win-tpl').content.firstElementChild.cloneNode(true);
 					win.dataset.key = key;
+					win.dataset.title = title;
 					win.querySelector('.win-title').textContent = title;
 					const [w, h] = sizes[key] || [520, 460];
 					const off = (cascade++ % 6) * 26;
@@ -227,34 +348,61 @@ templ Desktop() {
 					});
 					desk.appendChild(win);
 					focus(win);
+					syncDock();
 					const body = win.querySelector('.win-body');
 					// Each window is its own request source; sharing <body> makes htmx drop concurrent loads.
 					htmx.ajax('GET', url, { source: body, target: body, swap: 'innerHTML' });
 				};
-				window.closeWin = el => el.closest('.win')?.remove();
 
 				document.addEventListener('click', e => {
+					const r = e.target.closest('[data-restore]');
+					if (r) { const w = wins().find(w => w.dataset.key === r.dataset.restore); if (w) restore(w); return; }
 					const o = e.target.closest('[data-open]');
 					if (o) openApp(o.dataset.open, o.dataset.title, o.dataset.url);
-					if (e.target.closest('.win-x')) closeWin(e.target);
+					const ctl = e.target.closest('[data-win]');
+					if (!ctl) return;
+					const win = ctl.closest('.win');
+					if (ctl.dataset.win === 'close') closeWin(win);
+					if (ctl.dataset.win === 'min') minimize(win);
+					if (ctl.dataset.win === 'max') toggleMax(win);
+				});
+				desk.addEventListener('dblclick', e => {
+					if (e.target.closest('.win-bar') && !e.target.closest('button')) toggleMax(e.target.closest('.win'));
 				});
 
-				// Focus and drag windows by their title bar.
+				// Pointer drags: move by the title bar, resize from any edge or corner.
+				const drag = (e, win, onMove) => {
+					e.preventDefault();
+					win.classList.add('moving');
+					const start = { x: e.clientX, y: e.clientY, l: win.offsetLeft, t: win.offsetTop, w: win.offsetWidth, h: win.offsetHeight };
+					const move = m => onMove(m.clientX - start.x, m.clientY - start.y, start);
+					const up = () => { win.classList.remove('moving'); removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+					addEventListener('pointermove', move);
+					addEventListener('pointerup', up);
+				};
 				desk.addEventListener('pointerdown', e => {
 					const win = e.target.closest('.win');
 					if (!win) return;
 					focus(win);
-					const bar = e.target.closest('.win-bar');
-					if (!bar || e.target.closest('button')) return;
-					const dx = e.clientX - win.offsetLeft, dy = e.clientY - win.offsetTop;
-					const move = m => {
-						win.style.left = Math.max(-win.offsetWidth + 80, Math.min(m.clientX - dx, desk.clientWidth - 80)) + 'px';
-						win.style.top = Math.max(0, Math.min(m.clientY - dy, desk.clientHeight - 34)) + 'px';
-					};
-					const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
-					addEventListener('pointermove', move);
-					addEventListener('pointerup', up);
+					const rz = e.target.closest('[data-rz]');
+					if (rz) {
+						const d = rz.dataset.rz;
+						return drag(e, win, (dx, dy, s) => {
+							const minW = 320, minH = 200;
+							if (d.includes('e')) win.style.width = Math.max(minW, Math.min(s.w + dx, desk.clientWidth - s.l)) + 'px';
+							if (d.includes('s')) win.style.height = Math.max(minH, Math.min(s.h + dy, desk.clientHeight - s.t)) + 'px';
+							if (d.includes('w')) { const w = Math.max(minW, s.w - dx); win.style.width = w + 'px'; win.style.left = (s.l + s.w - w) + 'px'; }
+							if (d.includes('n')) { const h = Math.max(minH, Math.min(s.h - dy, s.t + s.h)); win.style.height = h + 'px'; win.style.top = (s.t + s.h - h) + 'px'; }
+						});
+					}
+					if (!e.target.closest('.win-bar') || e.target.closest('button')) return;
+					drag(e, win, (dx, dy, s) => {
+						if (win.classList.contains('max')) return;
+						win.style.left = Math.max(-s.w + 100, Math.min(s.l + dx, desk.clientWidth - 100)) + 'px';
+						win.style.top = Math.max(0, Math.min(s.t + dy, desk.clientHeight - 38)) + 'px';
+					});
 				});
+				addEventListener('resize', () => wins().filter(w => w.classList.contains('max')).forEach(w => Object.assign(w.style, { width: desk.clientWidth + 'px', height: desk.clientHeight + 'px' })));
 
 				// Upload: pick with the button, or drop files anywhere on a Files window.
 				const submitFiles = (files, zone) => {
@@ -323,8 +471,159 @@ templ Desktop() {
 				});
 
 				const clock = document.getElementById('clock');
-				const tick = () => clock.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+				const tick = () => { const d = new Date(); clock.textContent = d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }) + '  ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 				tick(); setInterval(tick, 10000);
+
+				// ---- Right-click menus ----
+				const ctx = document.getElementById('ctx');
+				const toast = msg => { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 1800); };
+				const copy = (text, what) => navigator.clipboard?.writeText(text).then(() => toast(what + ' copied'), () => toast('Copy failed'));
+				const post = async (url, done) => {
+					const r = await fetch(url, { method: 'POST' });
+					const body = await r.text();
+					if (!r.ok || body.includes('class="err"')) { toast((body.match(/class="err">([^<]*)/)?.[1] || body || r.statusText).slice(0, 120)); return false; }
+					if (done) toast(done);
+					return true;
+				};
+				const changed = () => htmx.trigger(document.body, 'vault:changed');
+				const q = encodeURIComponent;
+				const s3uri = (b, k = '') => `s3://${b}/${k}`;
+				const apps = [['files', 'Files', '/app/files'], ['stats', 'Stats', '/app/stats'], ['connect', 'Connect', '/app/connect'], ['present', 'Present', '/app/present?n=0']];
+
+				const menuFor = e => {
+					const t = e.target;
+					const el = t.closest('[data-ctx]');
+					const win = t.closest('.win');
+					if (el?.dataset.ctx === 'file') {
+						const { bucket, key, dl } = el.dataset;
+						return [{ head: key },
+							{ label: 'Open', act: () => el.click() },
+							{ label: 'Download', act: () => { const a = document.createElement('a'); a.href = dl; a.download = key.split('/').pop(); a.click(); } },
+							{ sep: 1 },
+							{ label: 'Copy S3 URI', act: () => copy(s3uri(bucket, key), 'S3 URI') },
+							{ label: 'Copy link', act: () => copy(location.origin + dl, 'Link') },
+							{ label: 'Show where it\u2019s stored', act: () => {
+								el.click();
+								const w = wins().find(w => w.dataset.key === el.dataset.open);
+								w?.querySelector('.win-body').addEventListener('htmx:afterSettle', () => w.querySelector('.viewer h3')?.scrollIntoView({ behavior: 'smooth' }), { once: true });
+							} },
+							{ sep: 1 },
+							{ label: 'Delete', danger: 1, act: async () => {
+								if (!confirm(`Delete \u201c${key}\u201d?`)) return;
+								if (await post(`/app/files/delete?bucket=${q(bucket)}&key=${q(key)}`, 'Deleted ' + key.split('/').pop())) {
+									wins().find(w => w.dataset.key === el.dataset.open)?.remove();
+									changed(); syncDock();
+								}
+							} }];
+					}
+					if (el?.dataset.ctx === 'folder') {
+						return [{ head: el.dataset.prefix },
+							{ label: 'Open', act: () => el.click() },
+							{ label: 'Copy S3 URI', act: () => copy(s3uri(el.dataset.bucket, el.dataset.prefix), 'S3 URI') }];
+					}
+					if (el?.dataset.ctx === 'bucket') {
+						const b = el.dataset.bucket;
+						return [{ head: 'Bucket ' + b },
+							{ label: 'Open', act: () => el.click() },
+							{ label: 'Copy S3 URI', act: () => copy(s3uri(b), 'S3 URI') },
+							{ sep: 1 },
+							{ label: 'Delete bucket', danger: 1, act: async () => {
+								if (!confirm(`Delete bucket \u201c${b}\u201d? It must be empty.`)) return;
+								if (await post(`/app/files/dropbucket?bucket=${q(b)}`, 'Deleted bucket ' + b)) changed();
+							} }];
+					}
+					if (el?.dataset.ctx === 'node') {
+						const { node: id, alive, slow, cutMeta } = el.dataset;
+						const act = (a, msg) => () => post(`/ui/nodes/${id}/${a}`, msg);
+						return [{ head: 'Storage node ' + id },
+							alive === 'true' ? { label: 'Kill', danger: 1, act: act('kill', id + ' killed') } : { label: 'Revive', act: act('revive', id + ' revived') },
+							{ label: 'Corrupt a chunk', act: act('corrupt', 'Flipped a byte on ' + id) },
+							{ label: slow === 'true' ? 'Make fast again' : 'Make slow', act: act('slow', slow === 'true' ? id + ' is fast' : id + ' is slow') },
+							{ label: cutMeta === 'true' ? 'Restore link to metadata' : 'Cut link to metadata', act: act('partition?peer=meta', 'Link toggled') }];
+					}
+					if (el?.dataset.ctx === 'files') {
+						const form = el.querySelector('.upload-form');
+						const input = el.querySelector('input[name=name]');
+						return [{ head: el.dataset.bucket ? s3uri(el.dataset.bucket, el.dataset.prefix) : 'Buckets' },
+							form && { label: 'Upload files\u2026', act: () => form.querySelector('input[type=file]').click() },
+							input && { label: 'New bucket\u2026', act: () => input.focus() },
+							el.dataset.bucket && { label: 'Copy S3 URI', act: () => copy(s3uri(el.dataset.bucket, el.dataset.prefix), 'S3 URI') },
+							{ label: 'Refresh', act: () => htmx.ajax('GET', el.getAttribute('hx-get'), { source: el, target: el, swap: 'outerHTML' }) }];
+					}
+					if (win && t.closest('.win-bar')) {
+						return [{ head: win.dataset.title },
+							{ label: 'Minimize', act: () => minimize(win) },
+							{ label: win.classList.contains('max') ? 'Restore size' : 'Zoom', act: () => toggleMax(win) },
+							{ sep: 1 },
+							{ label: 'Close', act: () => closeWin(win) },
+							{ label: 'Close other windows', act: () => { wins().filter(w => w !== win).forEach(w => w.remove()); syncDock(); } }];
+					}
+					const dockBtn = t.closest('#dock button');
+					if (dockBtn) {
+						const key = dockBtn.dataset.open || dockBtn.dataset.restore;
+						const w = wins().find(w => w.dataset.key === key);
+						const title = dockBtn.dataset.title || w?.dataset.title;
+						if (!w) return [{ head: title }, { label: 'Open', act: () => dockBtn.click() }];
+						return [{ head: title },
+							{ label: 'Show', act: () => restore(w) },
+							!w.classList.contains('min') && { label: 'Minimize', act: () => minimize(w) },
+							{ sep: 1 },
+							{ label: 'Quit', act: () => closeWin(w) }];
+					}
+					if (!win) {
+						const theme = document.documentElement.dataset.theme || 'system';
+						const setTheme = v => () => { applyTheme(v); try { localStorage.setItem('vault-theme', v); } catch {} };
+						return [{ head: 'Vault OS' },
+							...apps.map(([k, title, url]) => ({ label: 'Open ' + title, act: () => openApp(k, title, url) })),
+							{ sep: 1 },
+							{ head: 'Appearance' },
+							{ label: 'System', check: theme === 'system', act: setTheme('system') },
+							{ label: 'Light', check: theme === 'light', act: setTheme('light') },
+							{ label: 'Dark', check: theme === 'dark', act: setTheme('dark') },
+							{ sep: 1 },
+							{ label: 'Show all windows', act: () => wins().forEach(w => w.classList.remove('min')) || syncDock() },
+							{ label: 'Minimize all', act: () => wins().forEach(minimize) },
+							{ label: 'Close all windows', act: () => { wins().forEach(w => w.remove()); refocus(); syncDock(); } }];
+					}
+					return null; // inside window content: keep the browser's own menu
+				};
+
+				const hideMenu = () => { ctx.hidden = true; ctx.replaceChildren(); };
+				document.addEventListener('contextmenu', e => {
+					if (e.target.closest?.('input, textarea, select, #ctx')) return;
+					const items = menuFor(e)?.filter(Boolean);
+					if (!items) return hideMenu();
+					e.preventDefault();
+					ctx.replaceChildren(...items.map(it => {
+						if (it.sep) return document.createElement('hr');
+						if (it.head) { const h = document.createElement('div'); h.className = 'h'; h.textContent = it.head; return h; }
+						const b = document.createElement('button');
+						b.setAttribute('role', 'menuitem');
+						if (it.danger) b.className = 'danger';
+						b.innerHTML = '<span class="chk"></span><span></span>';
+						b.firstChild.textContent = it.check ? '\u2713' : '';
+						b.lastChild.textContent = it.label;
+						b.onclick = () => { hideMenu(); it.act(); };
+						return b;
+					}));
+					ctx.hidden = false;
+					const { innerWidth: vw, innerHeight: vh } = window;
+					ctx.style.left = Math.min(e.clientX, vw - ctx.offsetWidth - 6) + 'px';
+					ctx.style.top = Math.min(e.clientY, vh - ctx.offsetHeight - 6) + 'px';
+					ctx.querySelector('button')?.focus({ preventScroll: true });
+				});
+				addEventListener('pointerdown', e => { if (!ctx.hidden && !e.target.closest?.('#ctx')) hideMenu(); }, true);
+				addEventListener('keydown', e => {
+					if (ctx.hidden) return;
+					e.stopPropagation(); // keys drive the menu, not the window behind it
+					const items = [...ctx.querySelectorAll('button')];
+					const i = items.indexOf(document.activeElement);
+					if (e.key === 'Escape') hideMenu();
+					if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+					if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+				}, true);
+				addEventListener('blur', hideMenu);
+				addEventListener('resize', hideMenu);
 
 				// Start with the two apps that tell the story side by side.
 				const half = desk.clientWidth / 2;
@@ -344,7 +643,7 @@ templ Pulse(c Cluster) {
 // ---- Files ----
 
 templ FilesApp(f Files) {
-	<div class="files" hx-get={ f.URL() } hx-trigger="vault:changed from:body" hx-swap="outerHTML">
+	<div class="files" data-ctx="files" data-bucket={ f.Bucket } data-prefix={ f.Prefix } hx-get={ f.URL() } hx-trigger="vault:changed from:body" hx-swap="outerHTML">
 		<div class="toolbar">
 			for i, c := range f.Crumbs() {
 				if i > 0 {
@@ -367,7 +666,7 @@ templ FilesApp(f Files) {
 		if f.Bucket == "" {
 			<div class="grid">
 				for _, b := range f.Buckets {
-					<button class="tile" hx-get={ FilesURL(b.Name, "") } hx-target="closest .files" hx-swap="outerHTML">
+					<button class="tile" data-ctx="bucket" data-bucket={ b.Name } hx-get={ FilesURL(b.Name, "") } hx-target="closest .files" hx-swap="outerHTML">
 						<div class="folder bucket"></div>
 						<div class="name">{ b.Name }</div>
 						<div class="sub">{ b.Policy }</div>
@@ -397,13 +696,13 @@ templ FilesApp(f Files) {
 		} else {
 			<div class="grid">
 				for _, p := range f.Folders {
-					<button class="tile" hx-get={ FilesURL(f.Bucket, p) } hx-target="closest .files" hx-swap="outerHTML">
+					<button class="tile" data-ctx="folder" data-bucket={ f.Bucket } data-prefix={ p } hx-get={ FilesURL(f.Bucket, p) } hx-target="closest .files" hx-swap="outerHTML">
 						<div class="folder"></div>
 						<div class="name">{ FolderName(p) }</div>
 					</button>
 				}
 				for _, o := range f.Objects {
-					<button class="tile" data-open={ "view:" + o.Bucket + "/" + o.Key } data-title={ o.Name } data-url={ o.ViewURL() } title={ o.Key }>
+					<button class="tile" data-ctx="file" data-bucket={ o.Bucket } data-key={ o.Key } data-dl={ o.URL() } data-open={ "view:" + o.Bucket + "/" + o.Key } data-title={ o.Name } data-url={ o.ViewURL() } title={ o.Key }>
 						if o.Kind() == "image" {
 							<img class="thumb" src={ o.URL() } alt="" loading="lazy"/>
 						} else {
@@ -490,7 +789,7 @@ templ StatsLive(c Cluster) {
 	<h3>Storage nodes · { c.AliveNodes() }</h3>
 	<div class="nodes">
 		for _, n := range c.Nodes {
-			<div class={ "node", templ.KV("dead", !n.Alive) }>
+			<div class={ "node", templ.KV("dead", !n.Alive) } data-ctx="node" data-node={ n.ID } data-alive={ fmt.Sprint(n.Alive) } data-slow={ fmt.Sprint(n.SlowMs > 0) } data-cut-meta={ fmt.Sprint(n.PartitionedFrom("meta")) }>
 				<div>
 					if n.Alive {
 						<span class={ "dot", templ.KV("warn", len(n.Partitioned) > 0 || n.SlowMs > 0) }></span>

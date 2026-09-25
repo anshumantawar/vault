@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-//go:embed htmx.min.js
+//go:embed htmx.min.js wallpaper-light.svg wallpaper-dark.svg
 var Static embed.FS
 
 type Node struct {

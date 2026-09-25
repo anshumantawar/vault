@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="night" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#070a16"/>
+      <stop offset="0.55" stop-color="#0d1130"/>
+      <stop offset="1" stop-color="#1a0f2e"/>
+    </linearGradient>
+    <linearGradient id="waveA" x1="0" y1="0" x2="1" y2="0.2">
+      <stop offset="0" stop-color="#1f5bff"/>
+      <stop offset="0.5" stop-color="#6a3cf0"/>
+      <stop offset="1" stop-color="#c13fa8"/>
+    </linearGradient>
+    <linearGradient id="waveB" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0f8a9a"/>
+      <stop offset="0.5" stop-color="#2a4fd6"/>
+      <stop offset="1" stop-color="#7a2fc2"/>
+    </linearGradient>
+    <linearGradient id="waveC" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2d2a8c"/>
+      <stop offset="1" stop-color="#4a1f7a"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="46"/>
+    </filter>
+    <filter id="haze" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="100"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#night)"/>
+
+  <g filter="url(#haze)">
+    <circle cx="1240" cy="220" r="250" fill="#2a36b8" opacity="0.55"/>
+    <circle cx="260" cy="280" r="200" fill="#5a1f86" opacity="0.45"/>
+    <circle cx="780" cy="140" r="160" fill="#0f6f86" opacity="0.35"/>
+  </g>
+
+  <g filter="url(#soft)">
+    <path d="M-120 560 C 220 420, 520 700, 860 560 S 1440 360, 1760 500 L 1760 1120 L -120 1120 Z" fill="url(#waveC)" opacity="0.6"/>
+    <path d="M-120 650 C 250 520, 560 800, 900 650 S 1460 470, 1760 600 L 1760 1120 L -120 1120 Z" fill="url(#waveA)" opacity="0.55"/>
+    <path d="M-120 790 C 300 680, 640 900, 1000 770 S 1520 650, 1760 740 L 1760 1120 L -120 1120 Z" fill="url(#waveB)" opacity="0.6"/>
+  </g>
+
+  <g fill="none" stroke="#a9bcff" stroke-linecap="round">
+    <path d="M-60 640 C 260 510, 570 780, 900 640 S 1460 460, 1680 580" stroke-opacity="0.28" stroke-width="1.4"/>
+    <path d="M-60 668 C 270 540, 580 806, 910 668 S 1470 490, 1680 606" stroke-opacity="0.16" stroke-width="1"/>
+    <path d="M-60 696 C 280 570, 590 832, 920 696 S 1480 520, 1680 632" stroke-opacity="0.1" stroke-width="1"/>
+    <path d="M-60 800 C 310 700, 650 900, 1010 780 S 1530 670, 1680 740" stroke-opacity="0.2" stroke-width="1.2"/>
+  </g>
+
+  <g fill="#ffffff">
+    <circle cx="180" cy="120" r="1.1" opacity="0.5"/>
+    <circle cx="420" cy="70" r="0.9" opacity="0.4"/>
+    <circle cx="610" cy="210" r="1.2" opacity="0.35"/>
+    <circle cx="930" cy="90" r="1" opacity="0.45"/>
+    <circle cx="1110" cy="330" r="0.8" opacity="0.3"/>
+    <circle cx="1380" cy="110" r="1.2" opacity="0.5"/>
+    <circle cx="1520" cy="260" r="0.9" opacity="0.35"/>
+    <circle cx="80" cy="380" r="0.8" opacity="0.3"/>
+    <circle cx="1480" cy="420" r="1" opacity="0.25"/>
+    <circle cx="700" cy="330" r="0.8" opacity="0.25"/>
+  </g>
+</svg>
