@@ -192,11 +192,11 @@ func (s *server) PutChunk(stream vaultv1.NodeService_PutChunkServer) error {
 	return stream.SendAndClose(&vaultv1.PutChunkResponse{WrittenAt: mtime.UnixNano()})
 }
 
-func (s *server) read(sha string) ([]byte, error) {
+func (s *server) read(sha string, buf []byte) ([]byte, error) {
 	if !validSHA(sha) {
 		return nil, status.Error(codes.InvalidArgument, "invalid sha256")
 	}
-	b, err := s.store.get(sha)
+	b, err := s.store.read(sha, buf)
 	switch {
 	case errors.Is(err, errCorrupt):
 		go s.reportCorrupt(sha)
@@ -210,10 +210,13 @@ func (s *server) read(sha string) ([]byte, error) {
 }
 
 func (s *server) GetChunk(req *vaultv1.GetChunkRequest, stream vaultv1.NodeService_GetChunkServer) error {
-	b, err := s.read(req.GetSha256())
+	buf := wire.GetBuf()
+	defer wire.PutBuf(buf)
+	b, err := s.read(req.GetSha256(), *buf)
 	if err != nil {
 		return err
 	}
+	*buf = b // keep a grown buffer for the pool; Send copies each frame out before returning
 	for len(b) > 0 {
 		n := min(len(b), wire.FrameSize)
 		if err := stream.Send(&vaultv1.GetChunkResponse{Data: b[:n]}); err != nil {
@@ -242,10 +245,13 @@ func (s *server) PushChunk(ctx context.Context, req *vaultv1.PushChunkRequest) (
 	if s.cannotReach(req.GetTargetId()) {
 		return nil, status.Errorf(codes.Unavailable, "%s cannot reach %s", s.cfg.ID, req.GetTargetId())
 	}
-	b, err := s.read(req.GetSha256())
+	buf := wire.GetBuf()
+	defer wire.PutBuf(buf)
+	b, err := s.read(req.GetSha256(), *buf)
 	if err != nil {
 		return nil, err
 	}
+	*buf = b
 	at, err := SendChunk(ctx, s.pool, req.GetTargetAddr(), req.GetSha256(), b)
 	if err != nil {
 		return nil, err
@@ -284,8 +290,9 @@ func SendChunk(ctx context.Context, pool *wire.Pool, addr, sha string, b []byte)
 	return resp.GetWrittenAt(), nil
 }
 
-// FetchChunk reads one chunk from the node at addr and verifies its hash.
-func FetchChunk(ctx context.Context, pool *wire.Pool, addr, sha string) ([]byte, error) {
+// FetchChunk reads one chunk from the node at addr into buf (reused when big
+// enough, e.g. from wire.GetBuf) and verifies its hash.
+func FetchChunk(ctx context.Context, pool *wire.Pool, addr, sha string, buf []byte) ([]byte, error) {
 	conn, err := pool.Get(addr)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
@@ -294,7 +301,7 @@ func FetchChunk(ctx context.Context, pool *wire.Pool, addr, sha string) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	var b []byte
+	b := buf[:0]
 	for {
 		m, err := stream.Recv()
 		if err == io.EOF {
@@ -384,28 +391,26 @@ func (s *server) reportCorrupt(sha string) {
 	})
 }
 
-// scrubLoop re-hashes every chunk at a limited rate, forever.
+// scrubLoop re-hashes every chunk at a limited rate, forever, streaming each
+// file through the hash and walking the directory without listing it first.
 func (s *server) scrubLoop(ctx context.Context) {
 	for ctx.Err() == nil {
-		var shas []string
-		s.store.walk(func(sha string, _ fs.FileInfo) { shas = append(shas, sha) })
-		for _, sha := range shas {
+		s.store.walk(func(sha string, _ fs.FileInfo) {
+			for ctx.Err() == nil && s.cannotReach("") { // down: pause
+				time.Sleep(time.Second)
+			}
 			if ctx.Err() != nil {
 				return
 			}
-			if s.cannotReach("") { // down: pause
-				time.Sleep(time.Second)
-				continue
-			}
 			start := time.Now()
-			b, err := s.store.get(sha)
+			n, err := s.store.verify(sha)
 			if errors.Is(err, errCorrupt) {
 				s.reportCorrupt(sha)
 			}
 			// Sleep so we average at most ScrubBytesPerSec.
-			budget := time.Duration(float64(len(b)) / float64(s.cfg.ScrubBytesPerSec) * float64(time.Second))
+			budget := time.Duration(float64(n) / float64(s.cfg.ScrubBytesPerSec) * float64(time.Second))
 			time.Sleep(max(budget-time.Since(start), time.Millisecond))
-		}
+		})
 		select {
 		case <-ctx.Done():
 		case <-time.After(5 * time.Second):

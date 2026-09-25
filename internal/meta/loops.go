@@ -3,7 +3,6 @@ package meta
 import (
 	"context"
 	"log"
-	"maps"
 	"slices"
 	"time"
 
@@ -14,10 +13,43 @@ import (
 )
 
 const (
-	maxRepairs = 16 // concurrent repair copies
-	maxMoves   = 4  // concurrent rebalance copies; repair always wins
-	gcGrace    = 10 * time.Second
+	tick         = 500 * time.Millisecond
+	maxRepairs   = 16   // concurrent repair copies
+	maxMoves     = 4    // concurrent rebalance copies; repair always wins
+	perTick      = 4096 // queued chunks evaluated per tick
+	scanPerTick  = 2000 // chunks the safety-net scan walks per tick
+	gcPerTick    = 256
+	gcGrace      = 10 * time.Second
+	retryBackoff = 2 * time.Second
 )
+
+// markDirty queues a chunk for the leader to look at. Called by the FSM after
+// a change that may leave a chunk short of copies; followers ignore it.
+func (s *Server) markDirty(sha string) {
+	if !s.leader.Load() {
+		return
+	}
+	s.mu.Lock()
+	s.queue[sha] = time.Time{}
+	s.mu.Unlock()
+}
+
+// enqueueHolder queues every chunk a node holds: O(chunks on that node).
+func (s *Server) enqueueHolder(node string, at time.Time) {
+	var shas []string
+	s.fsm.view(func(t *tx) error {
+		t.scan(bHolder, node+"\x00", func(k, _ []byte) bool {
+			shas = append(shas, string(k[len(node)+1:]))
+			return true
+		})
+		return nil
+	})
+	s.mu.Lock()
+	for _, sha := range shas {
+		s.queue[sha] = at
+	}
+	s.mu.Unlock()
+}
 
 // watchLeadership runs on every leadership change, the moment raft reports it.
 func (s *Server) watchLeadership(ctx context.Context, ch <-chan bool) {
@@ -26,17 +58,22 @@ func (s *Server) watchLeadership(ctx context.Context, ch <-chan bool) {
 		case <-ctx.Done():
 			return
 		case leader := <-ch:
+			s.leader.Store(leader)
 			if !leader {
 				continue
 			}
 			// New leader: give every node a fresh grace period to heartbeat us,
-			// instead of treating them all as dead until they do.
+			// instead of treating them all as dead until they do, and start the
+			// bookkeeping over; the safety-net scan rebuilds it.
+			ids := map[string]bool{}
+			s.fsm.view(func(t *tx) error {
+				return t.Bucket(bNodes).ForEach(func(k, _ []byte) error { ids[string(k)] = true; return nil })
+			})
 			s.mu.Lock()
-			s.fsm.mu.RLock()
-			for id := range s.fsm.st.Nodes {
+			for id := range ids {
 				s.lastSeen[id] = time.Now()
 			}
-			s.fsm.mu.RUnlock()
+			s.queue, s.under, s.lost, s.wasAlive, s.scanPos = map[string]time.Time{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, nil
 			s.mu.Unlock()
 			log.Printf("meta %s: became leader", s.cfg.ID)
 		}
@@ -44,127 +81,189 @@ func (s *Server) watchLeadership(ctx context.Context, ch <-chan bool) {
 }
 
 func (s *Server) leaderLoops(ctx context.Context) {
-	t := time.NewTicker(time.Second)
+	t := time.NewTicker(tick)
 	defer t.Stop()
-	gcTick := 0
-	for {
+	for n := 0; ; n++ {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		leader := s.raft.State() == raft.Leader
-		if !leader {
+		if s.raft.State() != raft.Leader {
 			continue
 		}
 		s.reconcile(ctx)
-		if gcTick++; gcTick%2 == 0 {
+		if n%4 == 0 {
 			s.gc(ctx)
 		}
 	}
 }
 
-type chunkView struct {
-	sha     string
-	want    int
-	holders []string
+type cluster struct {
+	alive   []placement.Node
+	isAlive map[string]bool
+	addr    map[string]string
 }
 
-// reconcile compares where each chunk is against where it should be and
-// starts at most one copy or trim per chunk: repair first, then rebalance,
-// then trimming extra copies.
+// reconcile is one incremental pass: note node transitions, advance the
+// safety-net scan, then evaluate at most perTick queued chunks.
 func (s *Server) reconcile(ctx context.Context) {
-	nodes := s.nodes()
-	var alive []placement.Node
-	addr := map[string]string{}
-	isAlive := map[string]bool{}
-	for _, n := range nodes {
-		addr[n.Id] = n.Addr
+	cl := cluster{isAlive: map[string]bool{}, addr: map[string]string{}}
+	for _, n := range s.nodes() {
+		cl.addr[n.Id] = n.Addr
 		if n.Alive {
-			alive = append(alive, placement.Node{ID: n.Id, Zone: n.Zone})
-			isAlive[n.Id] = true
+			cl.alive = append(cl.alive, placement.Node{ID: n.Id, Zone: n.Zone})
+			cl.isAlive[n.Id] = true
 		}
 	}
-
-	s.fsm.mu.RLock()
-	var chunks []chunkView
-	for sha, ch := range s.fsm.st.Chunks {
-		if ch.Refs > 0 {
-			chunks = append(chunks, chunkView{sha, int(ch.Want), slices.Clone(ch.Holders)})
-		}
-	}
-	s.fsm.mu.RUnlock()
-
 	now := time.Now()
-	degradedStart := now
-	degraded := 0
+
+	// A node that died or came back changes its chunks: queue just those.
+	s.mu.Lock()
+	var changed []string
+	for id := range cl.addr {
+		if was, seen := s.wasAlive[id]; !seen && !cl.isAlive[id] || seen && was != cl.isAlive[id] {
+			changed = append(changed, id)
+		}
+	}
+	s.wasAlive = cl.isAlive
+	pos := s.scanPos
+	s.mu.Unlock()
+	for _, id := range changed {
+		s.enqueueHolder(id, now)
+	}
+
+	// The safety net: walk the chunk table a page per tick, wrapping around.
+	// It catches rebalancing onto new nodes and anything a hint missed.
+	var page []string
+	s.fsm.view(func(t *tx) error {
+		c := t.Bucket(bChunks).Cursor()
+		k, _ := c.Seek(append(slices.Clone(pos), 0))
+		if pos == nil {
+			k, _ = c.First()
+		}
+		for ; k != nil && len(page) < scanPerTick; k, _ = c.Next() {
+			page = append(page, string(k))
+		}
+		return nil
+	})
+
+	s.mu.Lock()
+	for _, sha := range page {
+		if _, queued := s.queue[sha]; !queued {
+			s.queue[sha] = now
+		}
+	}
+	if len(page) < scanPerTick {
+		s.scanPos = nil // wrap around
+	} else {
+		s.scanPos = []byte(page[len(page)-1])
+	}
+	var due []string
+	for sha, at := range s.queue {
+		if !at.After(now) && !s.inflight[sha] {
+			due = append(due, sha)
+			if len(due) == perTick {
+				break
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	// Evaluate the due chunks against the store.
+	views := map[string]*ChunkInfo{}
+	s.fsm.view(func(t *tx) error {
+		for _, sha := range due {
+			views[sha] = t.chunk(sha)
+		}
+		return nil
+	})
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	repairs := 0
-	for _, c := range chunks {
-		var live, down []string
-		for _, h := range c.holders {
-			if isAlive[h] {
-				live = append(live, h)
-			} else {
-				down = append(down, h)
-			}
-		}
-		if len(live) == 0 {
-			continue // lost: nothing to copy from
-		}
-		owners := ids(placement.Pick(c.sha, alive, c.want))
-		if len(live) < c.want {
-			degraded++
-			for _, h := range down {
-				// Count detection time in MTTR, but only for deaths in this episode.
-				if seen, ok := s.lastSeen[h]; ok && seen.After(s.lastHealthy) && seen.Before(degradedStart) {
-					degradedStart = seen
-				}
-			}
-		}
-		if s.inflight[c.sha] {
-			continue
-		}
-		switch {
-		case len(live) < c.want && repairs < maxRepairs:
-			var targets []string
-			for _, n := range placement.Order(c.sha, alive) {
-				if !slices.Contains(c.holders, n.ID) {
-					targets = append(targets, n.ID)
-				}
-			}
-			if len(targets) == 0 {
-				continue // not enough nodes to reach want
-			}
-			repairs++
-			s.inflight[c.sha] = true
-			go s.copyChunk(ctx, c.sha, live, targets[:min(3, len(targets))], addr, true)
-
-		case len(live) >= c.want && s.moves < maxMoves:
-			if missing := firstNotIn(owners, live); missing != "" {
-				s.moves++
-				s.inflight[c.sha] = true
-				go s.copyChunk(ctx, c.sha, live, []string{missing}, addr, false)
-			} else if extra := firstNotIn(live, owners); extra != "" && len(live) > c.want {
-				s.inflight[c.sha] = true
-				go s.trim(ctx, c.sha, extra, addr[extra])
-			}
+	for _, sha := range due {
+		if s.evaluate(ctx, sha, views[sha], cl, &repairs) {
+			delete(s.queue, sha)
 		}
 	}
 
-	if degraded == 0 {
-		s.lastHealthy = now
-	}
+	// MTTR: from the first failure of an episode until nothing is under-replicated.
 	switch {
-	case degraded > 0 && s.degraded.IsZero():
-		s.degraded = degradedStart
-		log.Printf("meta: %d chunks under-replicated, repairing", degraded)
-	case degraded == 0 && !s.degraded.IsZero():
-		s.lastMTTR = now.Sub(s.degraded)
-		s.degraded = time.Time{}
-		log.Printf("meta: full redundancy restored, MTTR %s", s.lastMTTR.Round(time.Millisecond))
+	case len(s.under) == 0:
+		if !s.degraded.IsZero() {
+			s.lastMTTR = now.Sub(s.degraded)
+			s.degraded = time.Time{}
+			log.Printf("meta: full redundancy restored, MTTR %s", s.lastMTTR.Round(time.Millisecond))
+		}
+		s.lastHealthy = now
+	case s.degraded.IsZero():
+		s.degraded = now
+		for id, seen := range s.lastSeen { // count detection time for deaths in this episode
+			if !cl.isAlive[id] && seen.After(s.lastHealthy) && seen.Before(s.degraded) {
+				s.degraded = seen
+			}
+		}
+		log.Printf("meta: %d chunks under-replicated, repairing", len(s.under))
 	}
+}
+
+// evaluate decides one chunk's next step and starts it. It returns true when
+// the chunk can leave the queue (healthy, lost, gone, or work started).
+// Called with s.mu held.
+func (s *Server) evaluate(ctx context.Context, sha string, ch *ChunkInfo, cl cluster, repairs *int) bool {
+	if ch == nil || ch.Refs == 0 {
+		delete(s.under, sha)
+		delete(s.lost, sha)
+		return true
+	}
+	want := int(ch.Want)
+	var live []string
+	for _, h := range ch.Holders {
+		if cl.isAlive[h] {
+			live = append(live, h)
+		}
+	}
+	delete(s.under, sha)
+	delete(s.lost, sha)
+	switch {
+	case len(live) == 0:
+		s.lost[sha] = true
+		return true // nothing to copy from; a returning holder re-queues it
+	case len(live) < want:
+		s.under[sha] = true
+	}
+	owners := ids(placement.Pick(sha, cl.alive, want))
+
+	switch {
+	case len(live) < want:
+		if *repairs >= maxRepairs {
+			return false
+		}
+		var targets []string
+		for _, n := range placement.Order(sha, cl.alive) {
+			if !slices.Contains(ch.Holders, n.ID) {
+				targets = append(targets, n.ID)
+			}
+		}
+		if len(targets) == 0 {
+			return true // not enough nodes to reach want; a node join re-queues it
+		}
+		*repairs++
+		s.inflight[sha] = true
+		go s.copyChunk(ctx, sha, live, targets[:min(3, len(targets))], cl.addr, true)
+	case firstNotIn(owners, live) != "":
+		if s.moves >= maxMoves {
+			return false
+		}
+		s.moves++
+		s.inflight[sha] = true
+		go s.copyChunk(ctx, sha, live, []string{firstNotIn(owners, live)}, cl.addr, false)
+	case len(live) > want:
+		extra := firstNotIn(live, owners)
+		s.inflight[sha] = true
+		go s.trim(ctx, sha, extra, cl.addr[extra])
+	}
+	return true
 }
 
 func ids(ns []placement.Node) []string {
@@ -192,17 +291,28 @@ func (s *Server) nodeClient(addr string) (vaultv1.NodeServiceClient, error) {
 	return vaultv1.NewNodeServiceClient(conn), nil
 }
 
+// done ends a copy or trim and re-queues the chunk to confirm the result.
+func (s *Server) done(sha string, ok, move bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.inflight, sha)
+	if move {
+		s.moves--
+	}
+	at := time.Now()
+	if !ok {
+		at = at.Add(retryBackoff)
+	}
+	if s.leader.Load() {
+		s.queue[sha] = at
+	}
+}
+
 // copyChunk asks each source in turn to push the chunk to each target, so a
 // partition between one pair doesn't block the repair.
 func (s *Server) copyChunk(ctx context.Context, sha string, sources, targets []string, addr map[string]string, repair bool) {
-	defer func() {
-		s.mu.Lock()
-		delete(s.inflight, sha)
-		if !repair {
-			s.moves--
-		}
-		s.mu.Unlock()
-	}()
+	ok := false
+	defer func() { s.done(sha, ok, !repair) }()
 	for _, t := range targets {
 		for _, src := range sources {
 			c, err := s.nodeClient(addr[src])
@@ -225,6 +335,7 @@ func (s *Server) copyChunk(ctx context.Context, sha string, sources, targets []s
 				s.rebalances++
 			}
 			s.mu.Unlock()
+			ok = true
 			return
 		}
 	}
@@ -233,15 +344,13 @@ func (s *Server) copyChunk(ctx context.Context, sha string, sources, targets []s
 
 // trim removes an extra copy: metadata first so readers stop using it.
 func (s *Server) trim(ctx context.Context, sha, node, addr string) {
-	defer func() {
-		s.mu.Lock()
-		delete(s.inflight, sha)
-		s.mu.Unlock()
-	}()
+	ok := false
+	defer func() { s.done(sha, ok, false) }()
 	before := time.Now()
 	if _, err := s.propose(&command{Op: "remove_holder", SHA: sha, NodeID: node}); err != nil {
 		return
 	}
+	ok = true
 	if c, err := s.nodeClient(addr); err == nil {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		c.DeleteChunk(cctx, &vaultv1.DeleteChunkRequest{Sha256: sha, IfWrittenBefore: before.UnixNano()})
@@ -250,17 +359,31 @@ func (s *Server) trim(ctx context.Context, sha, node, addr string) {
 }
 
 // gc tombstones unreferenced chunks, then deletes their files, retrying
-// nodes that were unreachable until every holder confirms.
+// nodes that were unreachable until every holder confirms. It walks only the
+// zero-reference and pending-delete indexes, never the whole chunk table.
 func (s *Server) gc(ctx context.Context) {
 	cutoff := time.Now().Add(-gcGrace).UnixNano()
-	s.fsm.mu.RLock()
 	var dead []string
-	for sha, ch := range s.fsm.st.Chunks {
-		if ch.Refs == 0 && ch.ZeroSince < cutoff && len(dead) < 256 {
-			dead = append(dead, sha)
-		}
+	type job struct {
+		sha string
+		t   Tombstone
 	}
-	s.fsm.mu.RUnlock()
+	var jobs []job
+	s.fsm.view(func(t *tx) error {
+		t.scan(bZero, "", func(k, _ []byte) bool {
+			if ch := t.chunk(string(k)); ch != nil && ch.Refs == 0 && ch.ZeroSince < cutoff {
+				dead = append(dead, string(k))
+			}
+			return len(dead) < gcPerTick
+		})
+		t.scan(bPending, "", func(k, _ []byte) bool {
+			if x := t.tomb(string(k)); x != nil {
+				jobs = append(jobs, job{string(k), *x})
+			}
+			return len(jobs) < gcPerTick
+		})
+		return nil
+	})
 	for _, sha := range dead {
 		if _, err := s.propose(&command{Op: "tombstone", SHA: sha}); err != nil {
 			return
@@ -273,17 +396,8 @@ func (s *Server) gc(ctx context.Context) {
 			addr[n.Id] = n.Addr
 		}
 	}
-	s.fsm.mu.RLock()
-	pending := map[string]Tombstone{}
-	for sha, t := range s.fsm.st.Tombstones {
-		if len(t.Pending) > 0 {
-			pending[sha] = Tombstone{At: t.At, Pending: slices.Clone(t.Pending)}
-		}
-	}
-	s.fsm.mu.RUnlock()
-	for _, sha := range slices.Sorted(maps.Keys(pending)) {
-		t := pending[sha]
-		for _, n := range t.Pending {
+	for _, j := range jobs {
+		for _, n := range j.t.Pending {
 			a, ok := addr[n]
 			if !ok {
 				continue // retry when it's back
@@ -293,10 +407,10 @@ func (s *Server) gc(ctx context.Context) {
 				continue
 			}
 			cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_, err = c.DeleteChunk(cctx, &vaultv1.DeleteChunkRequest{Sha256: sha, IfWrittenBefore: t.At})
+			_, err = c.DeleteChunk(cctx, &vaultv1.DeleteChunkRequest{Sha256: j.sha, IfWrittenBefore: j.t.At})
 			cancel()
 			if err == nil {
-				s.propose(&command{Op: "deleted", SHA: sha, NodeID: n})
+				s.propose(&command{Op: "deleted", SHA: j.sha, NodeID: n})
 			}
 		}
 	}

@@ -7,8 +7,11 @@ across zone-labelled nodes; the only mutable state is metadata, held by a 3-memb
 Design and demo script: `~/.claude/plans/pasted-content-id-ef9e-we-re-building-recursive-bee.md`.
 
 ## Processes (one binary: `vault meta | node | gateway`)
-- **meta** (`internal/meta`): Raft FSM in memory + JSON snapshots, `MetaService`.
-  The leader alone runs the loops in `loops.go`: failure detection (3 s), repair/rebalance/trim (`reconcile`), GC.
+- **meta** (`internal/meta`): Raft FSM stored on disk in bbolt (`fsm.go`, `<dir>/fsm.db`); one transaction per
+  Raft batch, which also records the applied index so log replay is idempotent. Snapshots stream the bbolt file.
+  Keyspaces include two indexes: `holder` (node → chunks) and `zero` (unreferenced chunks), plus running counters.
+  The leader alone runs `loops.go`: failure detection (3 s), and incremental `reconcile` over a work queue fed by
+  node transitions (holder index), FSM hints (`markDirty`) and a paced safety-net scan; GC walks only `zero`/`pending`.
 - **node** (`internal/node`): chunk files `dir/chunks/ab/cd/<sha>`, `NodeService`, scrubber,
   fault-injection interceptor (the *only* place faults are applied).
 - **gateway** (`internal/gateway`): stateless S3 API (`s3.go`, `sigv4.go`, `body.go`) and templ UI
@@ -54,8 +57,10 @@ S3 `:9000`, UI `:8080`, meta gRPC `:7001-7003`, Raft `:7101-7103`, nodes `:9101+
 - Deps: stdlib, grpc, protobuf, templ, hashicorp/raft (+raft-boltdb). Ask before adding anything.
 - Every new RPC needs an entry in its service's `wire.Rules` (unlisted = denied); every new UI route must be
   wrapped in `signedIn` or `adminOnly`, and every bucket-scoped handler must call `g.authorize`.
-- Every mutation of metadata goes through `propose` → `state.apply`; `apply` must stay deterministic
-  (use `command.Now`, never `time.Now()`).
+- Every mutation of metadata goes through `propose` → `tx.apply`; `apply` must stay deterministic
+  (use `command.Now`, never `time.Now()`), validate before writing, and keep counters/indexes in step
+  (`setHolders`, `incref`/`decref`, `putObject`). Never add a loop that walks a whole keyspace per tick.
+- Data path buffers come from `wire.GetBuf`/`PutBuf`; gateway reads and writes pipeline `pipeline` chunks.
 - Chunks are never modified in place; nodes verify the hash on every write and read and quarantine mismatches.
 - Deleting chunk files uses `if_written_before` + tombstones (see `needRetry`) so GC can't race a concurrent upload.
 - Every outbound RPC has a deadline. `Unavailable` → try the next replica/member; `DataLoss`/`NotFound` from a

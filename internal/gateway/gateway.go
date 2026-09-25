@@ -164,38 +164,68 @@ type written struct {
 	md5    string
 }
 
+// pipeline is how many chunks of one object are written or fetched at once.
+// Memory per request is bounded by pipeline × ChunkSize (pooled buffers).
+const pipeline = 4
+
 // writeObject cuts r into chunks and stores each on the bucket's replica
-// count of nodes, needing write_quorum acks per chunk.
-// ponytail: one chunk in flight at a time (replicas in parallel); pipeline
-// chunks if single-stream upload throughput matters.
+// count of nodes, needing write_quorum acks per chunk. Up to `pipeline`
+// chunks are in flight at once; reading and MD5 stay in order on this goroutine.
 func (g *Gateway) writeObject(ctx context.Context, b *vaultv1.Bucket, r io.Reader) (written, error) {
-	var w written
-	h := md5.New()
-	buf := make([]byte, wire.ChunkSize)
-	for {
-		n, err := io.ReadFull(r, buf)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		w       written
+		h       = md5.New()
+		slots   = make(chan struct{}, pipeline)
+		wg      sync.WaitGroup
+		errOnce sync.Once
+		failed  error
+	)
+	fail := func(err error) {
+		errOnce.Do(func() { failed = err; cancel() })
+	}
+	for ctx.Err() == nil {
+		buf := wire.GetBuf()
+		n, err := io.ReadFull(r, (*buf)[:wire.ChunkSize])
 		if n > 0 {
-			data := buf[:n]
+			data := (*buf)[:n]
 			h.Write(data)
-			sum := sha256.Sum256(data)
-			sha := hex.EncodeToString(sum[:])
-			holders, at, werr := g.writeChunk(ctx, sha, data, int(b.GetReplicas()), int(b.GetWriteQuorum()))
-			if werr != nil {
-				return w, werr
-			}
-			w.chunks = append(w.chunks, &vaultv1.Chunk{Sha256: sha, Size: int64(n), Holders: holders, WrittenAt: at})
+			c := &vaultv1.Chunk{Size: int64(n)}
+			w.chunks = append(w.chunks, c) // filled in by the worker; order is fixed here
 			w.size += int64(n)
+			slots <- struct{}{}
+			wg.Go(func() {
+				defer func() { wire.PutBuf(buf); <-slots }()
+				sum := sha256.Sum256(data)
+				c.Sha256 = hex.EncodeToString(sum[:])
+				holders, at, werr := g.writeChunk(ctx, c.Sha256, data, int(b.GetReplicas()), int(b.GetWriteQuorum()))
+				if werr != nil {
+					fail(werr)
+					return
+				}
+				c.Holders, c.WrittenAt = holders, at
+			})
+		} else {
+			wire.PutBuf(buf)
 		}
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			break
 		}
 		if err != nil {
 			var se *s3Error
-			if errors.As(err, &se) {
-				return w, err
+			if !errors.As(err, &se) {
+				err = errS3("IncompleteBody", "%v", err)
 			}
-			return w, errS3("IncompleteBody", "%v", err)
+			fail(err)
 		}
+	}
+	wg.Wait()
+	if failed != nil {
+		return w, failed
+	}
+	if err := ctx.Err(); err != nil {
+		return w, err
 	}
 	w.md5 = hex.EncodeToString(h.Sum(nil))
 	return w, nil
@@ -254,28 +284,63 @@ func (g *Gateway) writeChunk(ctx context.Context, sha string, data []byte, repli
 // ---- read path ----
 
 // readRange writes bytes [start, end] of o to w, verifying every chunk and
-// falling back across replicas.
+// falling back across replicas. The next `pipeline` chunks are fetched while
+// earlier ones are written, always in order.
 func (g *Gateway) readRange(ctx context.Context, o *vaultv1.Object, start, end int64, w io.Writer) error {
-	var off int64
-	for _, c := range o.GetChunks() {
-		cs, ce := off, off+c.GetSize()-1
-		off += c.GetSize()
-		if ce < start || cs > end {
-			continue
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type piece struct {
+		lo, hi int64
+		buf    *[]byte
+		data   []byte
+		err    error
+		ready  chan struct{}
+	}
+	queue := make(chan *piece, pipeline) // bounds chunks in flight
+	go func() {
+		defer close(queue)
+		var off int64
+		for _, c := range o.GetChunks() {
+			cs, ce := off, off+c.GetSize()-1
+			off += c.GetSize()
+			if ce < start || cs > end {
+				continue
+			}
+			p := &piece{lo: max(start, cs) - cs, hi: min(end, ce) - cs, buf: wire.GetBuf(), ready: make(chan struct{})}
+			select {
+			case queue <- p:
+			case <-ctx.Done():
+				wire.PutBuf(p.buf)
+				return
+			}
+			go func() {
+				p.data, p.err = g.fetchChunk(ctx, c, *p.buf)
+				close(p.ready)
+			}()
 		}
-		data, err := g.fetchChunk(ctx, c)
-		if err != nil {
-			return err
+	}()
+	var werr error
+	for p := range queue {
+		<-p.ready
+		if werr == nil && p.err != nil {
+			werr = p.err
 		}
-		lo, hi := max(start, cs)-cs, min(end, ce)-cs
-		if _, err := w.Write(data[lo : hi+1]); err != nil {
-			return err
+		if werr == nil {
+			*p.buf = p.data
+			if _, err := w.Write(p.data[p.lo : p.hi+1]); err != nil {
+				werr = err
+			}
+		}
+		wire.PutBuf(p.buf)
+		if werr != nil {
+			cancel() // stop fetching; drain what's queued
 		}
 	}
-	return nil
+	return werr
 }
 
-func (g *Gateway) fetchChunk(ctx context.Context, c *vaultv1.Chunk) ([]byte, error) {
+// fetchChunk reads c from its holders into buf, live holders first.
+func (g *Gateway) fetchChunk(ctx context.Context, c *vaultv1.Chunk, buf []byte) ([]byte, error) {
 	byID := g.nodeByID()
 	holders := slices.Clone(c.GetHolders())
 	// Live nodes first; a node we think is dead is still worth a last try.
@@ -288,10 +353,13 @@ func (g *Gateway) fetchChunk(ctx context.Context, c *vaultv1.Chunk) ([]byte, err
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		data, err := node.FetchChunk(cctx, g.pool, n.Addr, c.GetSha256())
+		data, err := node.FetchChunk(cctx, g.pool, n.Addr, c.GetSha256(), buf)
 		cancel()
 		if err == nil {
 			return data, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 		if code := status.Code(err); code == codes.DataLoss || code == codes.NotFound {
 			// That copy is bad or gone: tell the meta so repair replaces it.

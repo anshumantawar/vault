@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -20,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -93,6 +93,15 @@ type Server struct {
 	degraded    time.Time
 	lastHealthy time.Time
 	lastMTTR    time.Duration
+
+	// Incremental reconciliation (leader only): chunks to look at, and what the
+	// last look found, so no loop walks every chunk every tick.
+	leader   atomic.Bool
+	queue    map[string]time.Time // sha → not before
+	under    map[string]bool      // under-replicated, as last evaluated
+	lost     map[string]bool      // no live copy, as last evaluated
+	wasAlive map[string]bool
+	scanPos  []byte // paced full-scan cursor (safety net + rebalancing)
 }
 
 // Run serves the meta member until ctx is cancelled.
@@ -103,10 +112,20 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := os.MkdirAll(cfg.Dir, 0o700); err != nil {
 		return err
 	}
-	s := &Server{
-		cfg: cfg, fsm: &fsm{st: newState()}, pool: wire.NewPool(cfg.TLS),
-		lastSeen: map[string]time.Time{}, stats: map[string]*vaultv1.Node{}, inflight: map[string]bool{},
+	fsmPath := filepath.Join(cfg.Dir, "fsm.db")
+	_, statErr := os.Stat(fsmPath)
+	storeExisted := statErr == nil
+	f, err := openFSM(fsmPath)
+	if err != nil {
+		return err
 	}
+	defer f.Close()
+	s := &Server{
+		cfg: cfg, fsm: f, pool: wire.NewPool(cfg.TLS),
+		lastSeen: map[string]time.Time{}, stats: map[string]*vaultv1.Node{}, inflight: map[string]bool{},
+		queue: map[string]time.Time{}, under: map[string]bool{}, lost: map[string]bool{}, wasAlive: map[string]bool{},
+	}
+	f.onDirty = s.markDirty
 	defer s.pool.Close()
 
 	rc := raft.DefaultConfig()
@@ -117,6 +136,11 @@ func Run(ctx context.Context, cfg Config) error {
 	rc.LeaderLeaseTimeout = 250 * time.Millisecond
 	rc.CommitTimeout = 20 * time.Millisecond
 	rc.LogLevel = "WARN"
+	rc.BatchApplyCh = true // group concurrent proposals into one log append
+	// The store on disk already is the state: replaying the log tail after a
+	// restart is enough, so don't overwrite it with the last snapshot. A brand
+	// new store (first start, or migrating from the in-memory FSM) does restore.
+	rc.NoSnapshotRestoreOnStart = storeExisted
 	leaderCh := make(chan bool, 8)
 	rc.NotifyCh = leaderCh
 
@@ -191,13 +215,11 @@ func (s *Server) leaderOnly() error {
 
 // read runs fn on the state after confirming this member is still leader,
 // so a deposed leader never serves stale metadata.
-func (s *Server) read(fn func(*state) error) error {
+func (s *Server) read(fn func(*tx) error) error {
 	if err := s.raft.VerifyLeader().Error(); err != nil {
 		return errNotLeader
 	}
-	s.fsm.mu.RLock()
-	defer s.fsm.mu.RUnlock()
-	return fn(s.fsm.st)
+	return s.fsm.view(fn)
 }
 
 func (s *Server) propose(c *command) (result, error) {
@@ -230,9 +252,12 @@ func (s *Server) Heartbeat(ctx context.Context, req *vaultv1.HeartbeatRequest) (
 	if c, _ := wire.Caller(ctx); c.ID != n.GetId() {
 		return nil, status.Errorf(codes.PermissionDenied, "node %q may not heartbeat as %q", c.ID, n.GetId())
 	}
-	s.fsm.mu.RLock()
-	known := s.fsm.st.Nodes[n.GetId()]
-	s.fsm.mu.RUnlock()
+	var known *NodeInfo
+	s.fsm.view(func(t *tx) error {
+		var ni NodeInfo
+		known = ptrIf(t.get(bNodes, n.GetId(), &ni), &ni)
+		return nil
+	})
 	if known == nil || known.Addr != n.GetAddr() || known.Zone != n.GetZone() {
 		if _, err := s.propose(&command{Op: "upsert_node", NodeID: n.GetId(), Node: &NodeInfo{Addr: n.GetAddr(), Zone: n.GetZone()}}); err != nil {
 			return nil, err
@@ -263,9 +288,15 @@ func (s *Server) ReportCorrupt(ctx context.Context, req *vaultv1.ReportCorruptRe
 const deadAfter = 3 * time.Second
 
 func (s *Server) nodes() []*vaultv1.Node {
-	s.fsm.mu.RLock()
-	infos := maps.Clone(s.fsm.st.Nodes)
-	s.fsm.mu.RUnlock()
+	infos := map[string]*NodeInfo{}
+	s.fsm.view(func(t *tx) error {
+		return t.Bucket(bNodes).ForEach(func(k, v []byte) error {
+			var ni NodeInfo
+			must(json.Unmarshal(v, &ni))
+			infos[string(k)] = &ni
+			return nil
+		})
+	})
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*vaultv1.Node
@@ -311,8 +342,8 @@ func bucketPB(name string, b *Bucket) *vaultv1.Bucket {
 
 func (s *Server) GetBucket(_ context.Context, req *vaultv1.GetBucketRequest) (*vaultv1.GetBucketResponse, error) {
 	var out *vaultv1.Bucket
-	err := s.read(func(st *state) error {
-		b := st.Buckets[req.GetName()]
+	err := s.read(func(t *tx) error {
+		b := t.bucket(req.GetName())
 		if b == nil {
 			return s3err(codes.NotFound, "NoSuchBucket")
 		}
@@ -324,11 +355,13 @@ func (s *Server) GetBucket(_ context.Context, req *vaultv1.GetBucketRequest) (*v
 
 func (s *Server) ListBuckets(context.Context, *vaultv1.ListBucketsRequest) (*vaultv1.ListBucketsResponse, error) {
 	resp := &vaultv1.ListBucketsResponse{}
-	err := s.read(func(st *state) error {
-		for _, name := range slices.Sorted(maps.Keys(st.Buckets)) {
-			resp.Buckets = append(resp.Buckets, bucketPB(name, st.Buckets[name]))
-		}
-		return nil
+	err := s.read(func(t *tx) error {
+		return t.Bucket(bBuckets).ForEach(func(k, v []byte) error {
+			var b Bucket
+			must(json.Unmarshal(v, &b))
+			resp.Buckets = append(resp.Buckets, bucketPB(string(k), &b))
+			return nil
+		})
 	})
 	return resp, err
 }
@@ -360,7 +393,7 @@ func (s *Server) CommitObject(_ context.Context, req *vaultv1.CommitObjectReques
 }
 
 // objectPB converts an object, attaching current holders to each chunk.
-func objectPB(st *state, bucket, key string, o *Object, withChunks bool) *vaultv1.Object {
+func objectPB(t *tx, bucket, key string, o *Object, withChunks bool) *vaultv1.Object {
 	pb := &vaultv1.Object{
 		Bucket: bucket, Key: key, Size: o.Size, Etag: o.ETag, ContentType: o.ContentType,
 		UserMeta: o.UserMeta, ModifiedAt: o.ModifiedAt,
@@ -368,7 +401,7 @@ func objectPB(st *state, bucket, key string, o *Object, withChunks bool) *vaultv
 	if withChunks {
 		for _, c := range o.Chunks {
 			ch := &vaultv1.Chunk{Sha256: c.SHA, Size: c.Size}
-			if info := st.Chunks[c.SHA]; info != nil {
+			if info := t.chunk(c.SHA); info != nil {
 				ch.Holders = slices.Clone(info.Holders)
 			}
 			pb.Chunks = append(pb.Chunks, ch)
@@ -379,15 +412,15 @@ func objectPB(st *state, bucket, key string, o *Object, withChunks bool) *vaultv
 
 func (s *Server) GetObject(_ context.Context, req *vaultv1.GetObjectRequest) (*vaultv1.GetObjectResponse, error) {
 	var out *vaultv1.Object
-	err := s.read(func(st *state) error {
-		if st.Buckets[req.GetBucket()] == nil {
+	err := s.read(func(t *tx) error {
+		if !t.has(bBuckets, req.GetBucket()) {
 			return s3err(codes.NotFound, "NoSuchBucket")
 		}
-		o := st.Objects[req.GetBucket()][req.GetKey()]
+		o := t.object(req.GetBucket(), req.GetKey())
 		if o == nil {
 			return s3err(codes.NotFound, "NoSuchKey")
 		}
-		out = objectPB(st, req.GetBucket(), req.GetKey(), o, true)
+		out = objectPB(t, req.GetBucket(), req.GetKey(), o, true)
 		return nil
 	})
 	return &vaultv1.GetObjectResponse{Object: out}, err
@@ -415,13 +448,13 @@ func (s *Server) ListObjects(_ context.Context, req *vaultv1.ListObjectsRequest)
 		max = 1000
 	}
 	resp := &vaultv1.ListObjectsResponse{}
-	err := s.read(func(st *state) error {
-		if st.Buckets[req.GetBucket()] == nil {
+	err := s.read(func(t *tx) error {
+		if !t.has(bBuckets, req.GetBucket()) {
 			return s3err(codes.NotFound, "NoSuchBucket")
 		}
-		keys, prefixes, truncated := st.listObjects(req.GetBucket(), req.GetPrefix(), req.GetDelimiter(), req.GetStartAfter(), max)
+		keys, prefixes, truncated := t.listObjects(req.GetBucket(), req.GetPrefix(), req.GetDelimiter(), req.GetStartAfter(), max)
 		for _, k := range keys {
-			resp.Objects = append(resp.Objects, objectPB(st, req.GetBucket(), k, st.Objects[req.GetBucket()][k], false))
+			resp.Objects = append(resp.Objects, objectPB(t, req.GetBucket(), k, t.object(req.GetBucket(), k), false))
 		}
 		resp.CommonPrefixes = prefixes
 		resp.Truncated = truncated
@@ -465,13 +498,13 @@ func (s *Server) CompleteUpload(_ context.Context, req *vaultv1.CompleteUploadRe
 	for _, p := range req.GetParts() {
 		parts = append(parts, completedPart{Num: p.GetPartNumber(), ETag: p.GetEtag()})
 	}
-	s.fsm.mu.RLock()
-	u := s.fsm.st.Uploads[req.GetUploadId()]
 	var bucket, key string
-	if u != nil {
-		bucket, key = u.Bucket, u.Key
-	}
-	s.fsm.mu.RUnlock()
+	s.fsm.view(func(t *tx) error {
+		if u := t.upload(req.GetUploadId()); u != nil {
+			bucket, key = u.Bucket, u.Key
+		}
+		return nil
+	})
 	res, err := s.propose(&command{Op: "complete_upload", UploadID: req.GetUploadId(), Parts: parts})
 	if err != nil {
 		return nil, err
@@ -491,47 +524,29 @@ func (s *Server) ClusterStatus(_ context.Context, req *vaultv1.ClusterStatusRequ
 		return nil, err
 	}
 	nodes := s.nodes()
-	alive := map[string]bool{}
 	resp := &vaultv1.ClusterStatusResponse{Nodes: nodes}
 	for _, n := range nodes {
-		alive[n.Id] = n.Alive
 		if n.Alive {
 			resp.RawBytes += n.UsedBytes
 		}
 	}
 	max := int(req.GetMaxChunks())
-	s.fsm.mu.RLock()
-	for _, objs := range s.fsm.st.Objects {
-		for _, o := range objs {
-			resp.Objects++
-			resp.LogicalBytes += o.Size
-		}
-	}
-	shas := slices.Sorted(maps.Keys(s.fsm.st.Chunks))
-	for _, sha := range shas {
-		ch := s.fsm.st.Chunks[sha]
-		if ch.Refs == 0 {
-			continue
-		}
-		resp.TotalChunks++
-		live := 0
-		for _, h := range ch.Holders {
-			if alive[h] {
-				live++
+	// Totals are running counters; the heatmap reads only its first page.
+	s.fsm.view(func(t *tx) error {
+		resp.Objects, resp.LogicalBytes, resp.TotalChunks = t.counter(cObjects), t.counter(cLogical), t.counter(cChunks)
+		c := t.Bucket(bChunks).Cursor()
+		for k, v := c.First(); k != nil && len(resp.Chunks) < max; k, v = c.Next() {
+			var ch ChunkInfo
+			must(json.Unmarshal(v, &ch))
+			if ch.Refs > 0 {
+				resp.Chunks = append(resp.Chunks, &vaultv1.ChunkStatus{Sha256: string(k), Want: ch.Want, Holders: ch.Holders})
 			}
 		}
-		switch {
-		case live == 0:
-			resp.Lost++
-		case live < int(ch.Want):
-			resp.UnderReplicated++
-		}
-		if len(resp.Chunks) < max {
-			resp.Chunks = append(resp.Chunks, &vaultv1.ChunkStatus{Sha256: sha, Want: ch.Want, Holders: slices.Clone(ch.Holders)})
-		}
-	}
-	s.fsm.mu.RUnlock()
+		return nil
+	})
 	s.mu.Lock()
+	// Kept current by the reconcile loop as it evaluates chunks.
+	resp.UnderReplicated, resp.Lost = int64(len(s.under)), int64(len(s.lost))
 	resp.Repairs, resp.Rebalances, resp.LastMttrMs = s.repairs, s.rebalances, s.lastMTTR.Milliseconds()
 	if !s.degraded.IsZero() {
 		resp.DegradedSince = s.degraded.UnixNano()
@@ -578,12 +593,13 @@ func (s *Server) DeleteUser(_ context.Context, req *vaultv1.DeleteUserRequest) (
 
 func (s *Server) ListUsers(context.Context, *vaultv1.ListUsersRequest) (*vaultv1.ListUsersResponse, error) {
 	resp := &vaultv1.ListUsersResponse{}
-	err := s.read(func(st *state) error {
-		for _, k := range slices.Sorted(maps.Keys(st.Users)) {
-			u := st.Users[k]
-			resp.Users = append(resp.Users, &vaultv1.User{AccessKey: k, SecretKey: u.Secret, Name: u.Name, Admin: u.Admin, CreatedAt: u.CreatedAt})
-		}
-		return nil
+	err := s.read(func(t *tx) error {
+		return t.Bucket(bUsers).ForEach(func(k, v []byte) error {
+			var u User
+			must(json.Unmarshal(v, &u))
+			resp.Users = append(resp.Users, &vaultv1.User{AccessKey: string(k), SecretKey: u.Secret, Name: u.Name, Admin: u.Admin, CreatedAt: u.CreatedAt})
+			return nil
+		})
 	})
 	return resp, err
 }

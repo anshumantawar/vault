@@ -166,3 +166,19 @@ func (p *Pool) Close() {
 	}
 	p.conns = map[string]*grpc.ClientConn{}
 }
+
+// chunkBufs recycles chunk-sized buffers so steady-state reads and writes
+// allocate nothing per chunk.
+var chunkBufs = sync.Pool{New: func() any { b := make([]byte, 0, ChunkSize); return &b }}
+
+// GetBuf returns an empty buffer with room for a chunk. Return it with PutBuf.
+func GetBuf() *[]byte { return chunkBufs.Get().(*[]byte) }
+
+// PutBuf recycles b; oversized buffers are left to the GC.
+func PutBuf(b *[]byte) {
+	if cap(*b) > MaxChunkSize {
+		return
+	}
+	*b = (*b)[:0]
+	chunkBufs.Put(b)
+}

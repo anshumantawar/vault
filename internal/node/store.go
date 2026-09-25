@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"time"
 )
@@ -103,20 +104,51 @@ func (s *store) put(sha string, r io.Reader) (time.Time, error) {
 	return info.ModTime(), nil
 }
 
-// get reads and verifies a chunk. A corrupt chunk is quarantined and
-// errCorrupt returned, so it's never served twice.
-// ponytail: whole chunk in memory (≤16 MB) so nothing unverified is ever sent.
-func (s *store) get(sha string) ([]byte, error) {
-	b, err := os.ReadFile(s.path(sha))
+// read reads a chunk into buf (reused when it's big enough) and verifies it
+// before returning, so nothing unverified is ever served. A corrupt chunk is
+// quarantined and errCorrupt returned, so it's never served twice.
+func (s *store) read(sha string, buf []byte) ([]byte, error) {
+	f, err := os.Open(s.path(sha))
 	if err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(b)
-	if hex.EncodeToString(sum[:]) != sha {
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxChunk {
+		return nil, fmt.Errorf("chunk file larger than %d bytes", maxChunk)
+	}
+	b := slices.Grow(buf[:0], int(info.Size()))[:info.Size()]
+	if _, err := io.ReadFull(f, b); err != nil {
+		return nil, err
+	}
+	if !matches(sha, b) {
 		s.quarantine(sha)
 		return nil, errCorrupt
 	}
 	return b, nil
+}
+
+// verify re-hashes a chunk file as it streams from disk (no chunk-sized
+// buffer), quarantining it on mismatch. It returns the bytes read.
+func (s *store) verify(sha string) (int64, error) {
+	f, err := os.Open(s.path(sha))
+	if err != nil {
+		return 0, err
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	f.Close()
+	if err != nil {
+		return n, err
+	}
+	if hex.EncodeToString(h.Sum(nil)) != sha {
+		s.quarantine(sha)
+		return n, errCorrupt
+	}
+	return n, nil
 }
 
 func (s *store) quarantine(sha string) {
