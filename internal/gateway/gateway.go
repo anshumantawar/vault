@@ -44,6 +44,8 @@ type Gateway struct {
 
 	faultMu sync.Mutex
 	faults  map[string]*vaultv1.SetFaultRequest // UI-issued fault state per node
+
+	hist *history // Stats app timeline; only sampled when the UI is enabled
 }
 
 const from = "gateway"
@@ -52,13 +54,14 @@ const from = "gateway"
 func Run(ctx context.Context, cfg Config) error {
 	pool := wire.NewPool()
 	defer pool.Close()
-	g := &Gateway{cfg: cfg, pool: pool, meta: meta.NewClient(cfg.MetaAddrs, pool, from), faults: map[string]*vaultv1.SetFaultRequest{}}
+	g := &Gateway{cfg: cfg, pool: pool, meta: meta.NewClient(cfg.MetaAddrs, pool, from), faults: map[string]*vaultv1.SetFaultRequest{}, hist: &history{}}
 	g.nodes.Store(&[]*vaultv1.Node{})
 	go g.refreshNodes(ctx)
 
 	servers := []*http.Server{{Addr: cfg.S3Addr, Handler: http.HandlerFunc(g.serveS3)}}
 	if cfg.UIAddr != "" {
 		servers = append(servers, &http.Server{Addr: cfg.UIAddr, Handler: g.uiHandler()})
+		go g.sampleLoop(ctx)
 	}
 	errc := make(chan error, len(servers))
 	for _, srv := range servers {

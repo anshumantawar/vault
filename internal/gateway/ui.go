@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -31,7 +32,7 @@ func (g *Gateway) uiHandler() http.Handler {
 	mux.HandleFunc("POST /app/files/delete", g.appDelete)
 	mux.HandleFunc("GET /app/view", g.appView)
 	mux.HandleFunc("GET /app/stats", func(w http.ResponseWriter, r *http.Request) { ui.StatsApp().Render(r.Context(), w) })
-	mux.HandleFunc("GET /app/stats/live", g.appStatsLive)
+	mux.HandleFunc("GET /app/stats/data", g.appStatsData)
 	mux.HandleFunc("GET /app/connect", func(w http.ResponseWriter, r *http.Request) {
 		ui.ConnectApp(g.cfg.S3Addr, g.cfg.AccessKey).Render(r.Context(), w)
 	})
@@ -202,93 +203,117 @@ func (g *Gateway) appView(w http.ResponseWriter, r *http.Request) {
 
 // ---- Stats ----
 
-const heatmapRows = 96
-
 func (g *Gateway) appPulse(w http.ResponseWriter, r *http.Request) {
-	ui.Pulse(g.clusterView(r.Context(), 0)).Render(r.Context(), w)
+	ui.Pulse(g.clusterView(r.Context())).Render(r.Context(), w)
 }
 
-func (g *Gateway) appStatsLive(w http.ResponseWriter, r *http.Request) {
-	ui.StatsLive(g.clusterView(r.Context(), heatmapRows)).Render(r.Context(), w)
+// ---- Stats data ----
+
+type statsNode struct {
+	ID          string   `json:"id"`
+	Zone        string   `json:"zone"`
+	Addr        string   `json:"addr"`
+	State       string   `json:"state"`
+	Down        bool     `json:"down"`
+	Slow        bool     `json:"slow"`
+	Partitioned []string `json:"partitioned"`
+	Chunks      int64    `json:"chunks"`
+	Used        int64    `json:"used"`
 }
 
-func (g *Gateway) clusterView(ctx context.Context, maxChunks uint32) ui.Cluster {
-	var c ui.Cluster
-	var wg sync.WaitGroup
-	if maxChunks > 0 {
-		wg.Go(func() { c.Raft = g.raftViews(ctx) })
-	}
+type statsChunk struct {
+	SHA     string   `json:"sha"`
+	Want    uint32   `json:"want"`
+	Holders []string `json:"holders"`
+}
+
+type statsData struct {
+	Now      int64        `json:"now"`
+	Range    int64        `json:"range"`
+	Err      string       `json:"err,omitempty"`
+	Objects  int64        `json:"objects"`
+	Logical  int64        `json:"logical"`
+	Raw      int64        `json:"raw"`
+	Total    int64        `json:"totalChunks"`
+	Under    int64        `json:"under"`
+	Lost     int64        `json:"lost"`
+	Repairs  int64        `json:"repairs"`
+	Rebal    int64        `json:"rebalances"`
+	MTTR     int64        `json:"mttrMs"`
+	Healing  int64        `json:"healingMs"`
+	Nodes    []statsNode  `json:"nodes"`
+	Chunks   []statsChunk `json:"chunks"`
+	Raft     []ui.Raft    `json:"raft"`
+	Samples  []sample     `json:"samples"`
+	Events   []event      `json:"events"`
+	MoreChun int64        `json:"moreChunks"`
+}
+
+// appStatsData is everything the Stats app draws, in one JSON poll.
+func (g *Gateway) appStatsData(w http.ResponseWriter, r *http.Request) {
+	rng, _ := strconv.ParseInt(r.URL.Query().Get("range"), 10, 64)
+	rng = max(60, min(rng, historyLen))
+	now := time.Now()
+	d := statsData{Now: now.UnixMilli(), Range: rng, Nodes: []statsNode{}, Chunks: []statsChunk{}}
+	d.Samples, d.Events, d.Raft = g.hist.window(now.Add(-time.Duration(rng) * time.Second).UnixMilli())
+
 	var st *vaultv1.ClusterStatusResponse
-	err := g.meta.Call(ctx, func(ctx context.Context, mc vaultv1.MetaServiceClient) (err error) {
-		st, err = mc.ClusterStatus(ctx, &vaultv1.ClusterStatusRequest{MaxChunks: maxChunks})
+	err := g.meta.Call(r.Context(), func(ctx context.Context, c vaultv1.MetaServiceClient) (err error) {
+		st, err = c.ClusterStatus(ctx, &vaultv1.ClusterStatusRequest{MaxChunks: 120})
 		return err
 	})
-	wg.Wait()
+	if err != nil {
+		d.Err = err.Error()
+	} else {
+		d.Objects, d.Logical, d.Raw = st.GetObjects(), st.GetLogicalBytes(), st.GetRawBytes()
+		d.Total, d.Under, d.Lost = st.GetTotalChunks(), st.GetUnderReplicated(), st.GetLost()
+		d.Repairs, d.Rebal, d.MTTR = st.GetRepairs(), st.GetRebalances(), st.GetLastMttrMs()
+		if ds := st.GetDegradedSince(); ds > 0 {
+			d.Healing = now.Sub(time.Unix(0, ds)).Milliseconds()
+		}
+		for _, n := range st.GetNodes() {
+			g.faultMu.Lock()
+			f := g.faults[n.GetId()]
+			part := slices.Clone(n.GetPartitionedFrom())
+			slow := n.GetSlowMs() > 0
+			if f != nil {
+				part, slow = slices.Clone(f.GetPartitionedFrom()), f.GetSlowMs() > 0
+			}
+			g.faultMu.Unlock()
+			if part == nil {
+				part = []string{}
+			}
+			d.Nodes = append(d.Nodes, statsNode{
+				ID: n.GetId(), Zone: n.GetZone(), Addr: n.GetAddr(), State: g.nodeState(n),
+				Down: f.GetDown(), Slow: slow, Partitioned: part, Chunks: n.GetChunkCount(), Used: n.GetUsedBytes(),
+			})
+		}
+		for _, c := range st.GetChunks() {
+			d.Chunks = append(d.Chunks, statsChunk{SHA: c.GetSha256(), Want: c.GetWant(), Holders: c.GetHolders()})
+		}
+		d.MoreChun = st.GetTotalChunks() - int64(len(d.Chunks))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(d)
+}
+
+// clusterView is the one-line health summary for the menu bar.
+func (g *Gateway) clusterView(ctx context.Context) ui.Cluster {
+	var c ui.Cluster
+	var st *vaultv1.ClusterStatusResponse
+	err := g.meta.Call(ctx, func(ctx context.Context, mc vaultv1.MetaServiceClient) (err error) {
+		st, err = mc.ClusterStatus(ctx, &vaultv1.ClusterStatusRequest{})
+		return err
+	})
 	if err != nil {
 		c.Err = err.Error()
 		return c
 	}
-
-	var ids []string
-	alive := map[string]bool{}
 	for _, n := range st.GetNodes() {
-		ids = append(ids, n.GetId())
-		alive[n.GetId()] = n.GetAlive()
+		c.Nodes = append(c.Nodes, ui.Node{ID: n.GetId(), Alive: n.GetAlive()})
 	}
-	g.faultMu.Lock()
-	for _, n := range st.GetNodes() {
-		v := ui.Node{
-			ID: n.GetId(), Zone: n.GetZone(), Addr: n.GetAddr(), Alive: n.GetAlive(),
-			Partitioned: n.GetPartitionedFrom(), SlowMs: n.GetSlowMs(),
-			Used: ui.Bytes(n.GetUsedBytes()), Chunks: n.GetChunkCount(),
-		}
-		if f := g.faults[n.GetId()]; f != nil {
-			v.Down, v.Partitioned, v.SlowMs = f.GetDown(), f.GetPartitionedFrom(), f.GetSlowMs()
-		}
-		for _, p := range append(slices.Clone(ids), "meta", "gateway") {
-			if p != n.GetId() {
-				v.Peers = append(v.Peers, p)
-			}
-		}
-		c.Nodes = append(c.Nodes, v)
-	}
-	g.faultMu.Unlock()
-
-	for _, ch := range st.GetChunks() {
-		row := ui.ChunkRow{SHA: ch.GetSha256(), State: "ok"}
-		live := 0
-		for _, id := range ids {
-			cell := ui.CellNone
-			if slices.Contains(ch.GetHolders(), id) {
-				cell = ui.CellStale
-				if alive[id] {
-					cell = ui.CellOK
-					live++
-				}
-			}
-			row.Cells = append(row.Cells, cell)
-		}
-		switch {
-		case live == 0:
-			row.State = "lost"
-		case live < int(ch.GetWant()):
-			row.State = "degraded"
-		}
-		c.Rows = append(c.Rows, row)
-	}
-
-	c.MoreChunks = st.GetTotalChunks() - int64(len(st.GetChunks()))
-	c.Objects, c.TotalChunks, c.Under, c.Lost = st.GetObjects(), st.GetTotalChunks(), st.GetUnderReplicated(), st.GetLost()
-	c.Repairs, c.Rebalances = st.GetRepairs(), st.GetRebalances()
-	c.Logical, c.Raw = ui.Bytes(st.GetLogicalBytes()), ui.Bytes(st.GetRawBytes())
-	c.Overhead = "–"
-	if st.GetLogicalBytes() > 0 {
-		c.Overhead = fmt.Sprintf("%.2f×", float64(st.GetRawBytes())/float64(st.GetLogicalBytes()))
-	}
-	c.MTTR = "–"
-	if st.GetLastMttrMs() > 0 {
-		c.MTTR = (time.Duration(st.GetLastMttrMs()) * time.Millisecond).Round(100 * time.Millisecond).String()
-	}
+	c.Lost = st.GetLost()
 	if ds := st.GetDegradedSince(); ds > 0 {
 		c.Healing = time.Since(time.Unix(0, ds)).Round(time.Second).String()
 	}
@@ -362,15 +387,37 @@ func (g *Gateway) uiFault(w http.ResponseWriter, r *http.Request) {
 	req := &vaultv1.SetFaultRequest{Down: f.Down, PartitionedFrom: slices.Clone(f.PartitionedFrom), SlowMs: f.SlowMs, Corrupt: action == "corrupt"}
 	g.faultMu.Unlock()
 
+	var resp *vaultv1.SetFaultResponse
 	conn, err := g.pool.Get(n.GetAddr())
 	if err == nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		_, err = vaultv1.NewNodeServiceClient(conn).SetFault(ctx, req)
+		resp, err = vaultv1.NewNodeServiceClient(conn).SetFault(ctx, req)
 		cancel()
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	switch action {
+	case "kill":
+		g.hist.log("chaos", "You killed %s", id)
+	case "revive":
+		g.hist.log("chaos", "You revived %s", id)
+	case "corrupt":
+		g.hist.log("chaos", "You flipped a byte in chunk %.8s on %s", resp.GetCorruptedSha256(), id)
+	case "slow":
+		if req.SlowMs > 0 {
+			g.hist.log("chaos", "You slowed %s to %dms per call", id, req.SlowMs)
+		} else {
+			g.hist.log("chaos", "You made %s fast again", id)
+		}
+	case "partition":
+		peer := r.URL.Query().Get("peer")
+		if slices.Contains(req.PartitionedFrom, peer) {
+			g.hist.log("chaos", "You cut the link %s ↔ %s", id, peer)
+		} else {
+			g.hist.log("chaos", "You restored the link %s ↔ %s", id, peer)
+		}
 	}
 	fmt.Fprintf(w, "%s: %s applied", id, action)
 }
@@ -384,6 +431,7 @@ func (g *Gateway) uiStepDown(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	g.hist.log("chaos", "You forced a metadata leader election")
 	fmt.Fprint(w, "leadership handed to another member")
 }
 
@@ -408,6 +456,7 @@ func (g *Gateway) demoHeal(w http.ResponseWriter, r *http.Request) {
 		}
 		healed++
 	}
+	g.hist.log("chaos", "You cleared all injected faults")
 	fmt.Fprintf(w, "cleared faults on %d nodes", healed)
 	if failed > 0 {
 		fmt.Fprintf(w, " (%d unreachable: processes that were really stopped need restarting)", failed)

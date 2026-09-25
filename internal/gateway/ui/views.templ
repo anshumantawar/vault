@@ -101,6 +101,85 @@ templ Desktop() {
 				.dot.warn { background: var(--warn); box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 22%, transparent); }
 				.dot.bad { background: var(--bad); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bad) 22%, transparent); }
 				.dot.idle { background: var(--idle); box-shadow: none; }
+				:root {
+					--c-degraded: #eda100; --c-lost: #e87ba4; --c-bar: #2a78d6; --c-up: #d9d7d0; --c-grid: #e1e0d9; --c-axis: #898781; --c-surface: var(--win);
+				}
+				@media (prefers-color-scheme: dark) {
+					:root:not([data-theme="light"]) { --c-degraded: #c98500; --c-lost: #d55181; --c-bar: #3987e5; --c-up: #3a3a37; --c-grid: #2c2c2a; }
+				}
+				:root[data-theme="dark"] { --c-degraded: #c98500; --c-lost: #d55181; --c-bar: #3987e5; --c-up: #3a3a37; --c-grid: #2c2c2a; }
+				.st { position: relative; display: grid; gap: 12px; }
+				.st-top { display: flex; align-items: center; gap: 10px; }
+				.st-status { flex: 1; display: flex; align-items: center; gap: 2px; font-size: 14px; font-weight: 600; }
+				.st-status .since { font-weight: 400; color: var(--muted); margin-left: 6px; }
+				.seg { display: inline-flex; gap: 1px; padding: 2px; border-radius: 7px; background: color-mix(in srgb, var(--text) 7%, transparent); }
+				.seg button { border: 0; background: transparent; padding: 2px 10px; border-radius: 5px; font-size: 12px; cursor: pointer; color: var(--muted); }
+				.seg button[aria-pressed="true"] { background: var(--win); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+				.st-kpis { display: grid; grid-template-columns: 1.3fr repeat(4, 1fr); gap: 8px; }
+				.kpi { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+				.kpi .label { font-size: 11px; color: var(--muted); }
+				.kpi .value { font-size: 22px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
+				.kpi .sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+				.kpi.hero .value { font-size: 40px; letter-spacing: -.02em; }
+				.meter { height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--c-bar) 18%, transparent); margin-top: 6px; overflow: hidden; }
+				.meter i { display: block; height: 100%; border-radius: 2px; background: var(--c-bar); }
+				.st-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+				.st-card header, .st-card summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+				.st-card summary { cursor: pointer; list-style: none; }
+				.st-card summary::-webkit-details-marker { display: none; }
+				.st-card summary::before { content: "›"; color: var(--muted); transition: transform .15s; display: inline-block; }
+				.st-card[open] summary::before { transform: rotate(90deg); }
+				.st-card h4 { margin: 0; font-size: 13px; font-weight: 600; flex: 1; }
+				.st-card header .legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); }
+				.st-sub { margin: 2px 0 6px; font-size: 11px; color: var(--muted); }
+				.legend span { display: inline-flex; align-items: center; gap: 5px; }
+				.key { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+				.k-degraded { background: var(--c-degraded); } .k-lost { background: var(--c-lost); }
+				.k-up { background: var(--c-up); } .k-impaired { background: var(--c-degraded); } .k-down { background: var(--c-lost); }
+				.chart svg { display: block; width: 100%; overflow: visible; }
+				.chart text { font: 10px ui-sans-serif, system-ui, sans-serif; fill: var(--c-axis); }
+				.chart .lbl { font-size: 11px; fill: var(--text); font-weight: 600; }
+				.st-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+				.bars { display: grid; gap: 4px; margin-top: 6px; }
+				.bar-row { display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 8px; border: 0; background: transparent; padding: 3px 4px; border-radius: 6px; cursor: pointer; text-align: left; }
+				.bar-row:hover, .bar-row:focus-visible { background: var(--soft); outline: none; }
+				.bar-row.sel { background: var(--soft); box-shadow: inset 0 0 0 1px var(--muted); }
+				.bar-row .who { font-size: 12px; font-weight: 600; } .bar-row .who small { font-weight: 400; color: var(--muted); margin-left: 4px; }
+				.bar-row .track { height: 14px; }
+				.bar-row .fill { height: 100%; min-width: 2px; border-radius: 0 4px 4px 0; background: var(--c-bar); transition: width .3s; }
+				.bar-row.off .fill { background: var(--c-up); }
+				.bar-row .val { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+				.nodepanel { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); display: grid; gap: 6px; font-size: 12px; }
+				.feed { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 2px; max-height: 210px; overflow: auto; }
+				.feed li { display: grid; grid-template-columns: 54px 14px 1fr; gap: 6px; align-items: baseline; padding: 3px 4px; border-radius: 5px; font-size: 12px; cursor: default; }
+				.feed li:hover { background: var(--soft); }
+				.feed time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+				.feed .ic { font-size: 11px; text-align: center; font-weight: 700; }
+				.feed .bad .ic { color: var(--c-lost); } .feed .good .ic { color: var(--ok); } .feed .chaos .ic { color: var(--c-degraded); } .feed .info .ic { color: var(--muted); }
+				.feed .empty { color: var(--muted); display: block; }
+				.raft { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+				.member { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+				.member b { font-weight: 600; } .member.leader { border-color: var(--text); }
+				.cmap { display: grid; gap: 2px; margin-top: 8px; overflow-x: auto; }
+				.cmap .r { display: flex; gap: 2px; align-items: center; }
+				.cmap code { width: 76px; flex: none; font-size: 10px; color: var(--muted); }
+				.cmap .c { width: 22px; height: 10px; flex: none; border-radius: 2px; background: var(--soft); }
+				.cmap .c.ok { background: var(--c-bar); } .cmap .c.stale { background: var(--c-lost); opacity: .6; }
+				.cmap .hd span { width: 22px; flex: none; font-size: 10px; text-align: center; color: var(--muted); }
+				.st-table table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+				.st-table th, .st-table td { text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+				.st-table th:first-child, .st-table td:first-child { text-align: left; }
+				.st-table th { color: var(--muted); font-weight: 500; font-size: 11px; }
+				.st-tip { position: absolute; z-index: 10; pointer-events: none; min-width: 140px; padding: 7px 9px; border-radius: 8px; font-size: 12px;
+					background: var(--win); border: 1px solid var(--line); box-shadow: var(--shadow); }
+				.st-tip .t { color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+				.st-tip .row { display: flex; align-items: center; gap: 6px; }
+				.st-tip .row b { font-weight: 600; min-width: 22px; }
+				.st-tip .row i { display: inline-block; width: 10px; height: 2px; border-radius: 1px; }
+				.st-tip .ev { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+				.st.stale { opacity: .6; }
+				.win-body:has(> .st) { container-type: inline-size; }
+				@container (max-width: 640px) { .st-kpis { grid-template-columns: 1fr 1fr; } .kpi.hero { grid-column: 1 / -1; } .st-cols { grid-template-columns: 1fr; } }
 				.theme { display: inline-flex; gap: 1px; padding: 2px; border-radius: 7px; background: color-mix(in srgb, var(--text) 7%, transparent); }
 				.theme button { border: 0; background: transparent; width: 24px; height: 18px; border-radius: 5px; cursor: pointer; color: var(--muted); display: grid; place-items: center; padding: 0; }
 				.theme button svg { width: 12px; height: 12px; }
@@ -283,7 +362,7 @@ templ Desktop() {
 			<script>
 			(() => {
 				const desk = document.getElementById('desk');
-				const sizes = { files: [640, 480], stats: [560, 640], connect: [460, 340], present: [880, 600] };
+				const sizes = { files: [640, 480], stats: [760, 720], connect: [460, 340], present: [880, 600] };
 				let z = 10, cascade = 0;
 
 				const dock = document.getElementById('dock');
@@ -625,10 +704,414 @@ templ Desktop() {
 				addEventListener('blur', hideMenu);
 				addEventListener('resize', hideMenu);
 
+				// ---- Stats app: charts drawn from /app/stats/data, refreshed every second ----
+				const NS = 'http://www.w3.org/2000/svg';
+				const svgEl = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); parent?.appendChild(e); return e; };
+				const el = (tag, cls, text, parent) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; parent?.appendChild(e); return e; };
+				const bytes = n => { const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB']; let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + ' ' + u[i]; };
+				const hms = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+				const dur = ms => ms < 1000 ? ms + 'ms' : ms < 60000 ? (ms / 1000).toFixed(1).replace(/\.0$/, '') + 's' : Math.floor(ms / 60000) + 'm ' + Math.round(ms % 60000 / 1000) + 's';
+				const niceMax = v => [4, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000].find(n => v <= n) ?? Math.ceil(v / 1000) * 1000;
+				const byId = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+				const icons = { bad: '✕', good: '✓', chaos: '⚡', info: '•' };
+				const stateName = { up: 'Online', impaired: 'Impaired', down: 'Offline' };
+
+				window.mountStats = root => {
+					root.dataset.mounted = '1';
+					const $ = n => root.querySelector(`[data-el="${n}"]`);
+					const css = v => getComputedStyle(root).getPropertyValue(v).trim();
+					const tip = $('tip');
+					let range = 300, data = null, sel = null, table = false, timer;
+					let hover = null; // { t, row?, ev } — shared crosshair across the time charts
+					const charts = {};
+					const sigs = {};
+					const changed = (key, v) => { const s = JSON.stringify(v); if (sigs[key] === s) return false; sigs[key] = s; return true; };
+
+					// ---- tooltip ----
+					const placeTip = ev => {
+						const r = root.getBoundingClientRect();
+						let x = ev.clientX - r.left + 14;
+						if (x + tip.offsetWidth > r.width) x = ev.clientX - r.left - tip.offsetWidth - 14;
+						tip.style.left = Math.max(0, x) + 'px';
+						tip.style.top = (ev.clientY - r.top + 14) + 'px';
+					};
+					const showTip = (ev, build) => { tip.replaceChildren(); build(tip); tip.hidden = false; placeTip(ev); };
+					const hideTip = () => { tip.hidden = true; };
+					const tipRow = (parent, color, value, label) => {
+						const r = el('div', 'row', null, parent);
+						el('i', null, null, r).style.background = color;
+						el('b', null, String(value), r);
+						el('span', 'muted', label, r);
+					};
+
+					// ---- shared time frame ----
+					const frame = (w, m) => {
+						const t1 = data.now, t0 = t1 - range * 1000, span = w - m.l - m.r;
+						return { t0, t1, x: t => m.l + (t - t0) / (t1 - t0) * span, tAt: px => t0 + (px - m.l) / span * (t1 - t0) };
+					};
+					const timeAxis = (svg, f, h) => {
+						const step = range <= 60 ? 15 : range <= 300 ? 60 : 180;
+						for (let s = range; s >= 0; s -= step) {
+							const txt = svgEl('text', { x: f.x(f.t1 - s * 1000), y: h - 3, 'text-anchor': s === range ? 'start' : s === 0 ? 'end' : 'middle' }, svg);
+							txt.textContent = s === 0 ? 'now' : (s >= 60 ? s / 60 + 'm' : s + 's') + ' ago';
+						}
+					};
+					const segments = () => {
+						const out = []; let cur = [];
+						for (const p of data.samples) {
+							if (cur.length && p.t - cur[cur.length - 1].t > 3000) { out.push(cur); cur = []; }
+							cur.push(p);
+						}
+						if (cur.length) out.push(cur);
+						return out;
+					};
+					const nearest = t => data.samples.reduce((best, p) => !best || Math.abs(p.t - t) < Math.abs(best.t - t) ? p : best, null);
+					const overlay = (svg, key, w, h, m, rowAt) => {
+						const r = svgEl('rect', { x: m.l, y: 0, width: Math.max(0, w - m.l - m.r), height: h, fill: 'transparent' }, svg);
+						r.style.cursor = 'crosshair';
+						r.addEventListener('pointermove', ev => {
+							const b = svg.getBoundingClientRect(), scale = w / b.width;
+							const px = (ev.clientX - b.left) * scale, py = (ev.clientY - b.top) * scale;
+							hover = { t: charts[key].f.tAt(px), row: rowAt?.(py), ev, src: key };
+							updateCross();
+						});
+						r.addEventListener('pointerleave', () => { hover = null; updateCross(); });
+					};
+
+					// ---- chart 1: chunks missing a copy (stacked: missing, lost) ----
+					const drawMissing = () => {
+						const box = $('missing'), w = Math.max(280, box.clientWidth), h = 150, m = { l: 28, r: 34, t: 10, b: 18 };
+						const f = frame(w, m), pts = data.samples;
+						const top = niceMax(Math.max(0, ...pts.map(p => p.d + p.l)));
+						const y = v => h - m.b - v / top * (h - m.t - m.b);
+						const svg = svgEl('svg', { viewBox: `0 0 ${w} ${h}`, height: h, role: 'img', 'aria-label': 'Chunks missing a copy over time' });
+						for (const v of [0, top / 2, top]) {
+							svgEl('line', { x1: m.l, x2: w - m.r, y1: y(v), y2: y(v), stroke: v === 0 ? css('--c-axis') : css('--c-grid'), 'stroke-opacity': v === 0 ? 0.5 : 1 }, svg);
+							svgEl('text', { x: m.l - 6, y: y(v) + 3, 'text-anchor': 'end' }, svg).textContent = v;
+						}
+						timeAxis(svg, f, h);
+						for (const e of data.events) {
+							if (e.k === 'info' || f.x(e.t) < m.l) continue;
+							const x = f.x(e.t);
+							svgEl('line', { x1: x, x2: x, y1: m.t, y2: h - m.b, stroke: css('--c-grid') }, svg);
+							svgEl('circle', { cx: x, cy: m.t, r: 4, fill: e.k === 'good' ? css('--ok') : e.k === 'bad' ? css('--c-lost') : css('--c-degraded'), stroke: css('--c-surface'), 'stroke-width': 2 }, svg);
+						}
+						const layers = [
+							{ top: p => p.d, base: () => 0, color: css('--c-degraded') },
+							{ top: p => p.d + p.l, base: p => p.d, color: css('--c-lost') },
+						];
+						for (const L of layers) {
+							for (const seg of segments()) {
+								const has = i => seg[i] && L.top(seg[i]) > L.base(seg[i]);
+								if (!seg.some((_, i) => has(i))) continue;
+								const upper = seg.map(p => `${f.x(p.t)},${y(L.top(p))}`);
+								const lower = seg.slice().reverse().map(p => `${f.x(p.t)},${y(L.base(p))}`);
+								svgEl('polygon', { points: upper.concat(lower).join(' '), fill: L.color, 'fill-opacity': 0.14 }, svg);
+								let d = '', pen = false;
+								seg.forEach((p, i) => {
+									if (has(i) || has(i - 1) || has(i + 1)) { d += `${pen ? 'L' : 'M'}${f.x(p.t)},${y(L.top(p))}`; pen = true; } else pen = false;
+								});
+								svgEl('path', { d, fill: 'none', stroke: L.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+							}
+						}
+						const last = pts[pts.length - 1];
+						if (last) {
+							svgEl('text', { x: w - m.r + 6, y: y(last.d) + 4, class: 'lbl' }, svg).textContent = last.d;
+							if (last.l > 0) svgEl('text', { x: w - m.r + 6, y: y(last.d + last.l) - 6, class: 'lbl' }, svg).textContent = last.l;
+						} else {
+							svgEl('text', { x: w / 2, y: h / 2, 'text-anchor': 'middle' }, svg).textContent = 'Collecting samples…';
+						}
+						overlay(svg, 'missing', w, h, m);
+						charts.missing = { svg, f, h, m, y };
+						box.replaceChildren(svg);
+					};
+
+					const drawTable = () => {
+						const box = $('table');
+						const rows = [];
+						let prev = null;
+						for (const p of data.samples) {
+							const off = Object.values(p.n).filter(s => s !== 'up').length;
+							const key = `${p.d}/${p.l}/${off}`;
+							if (key !== prev) rows.push([hms(p.t), p.d, p.l, off]);
+							prev = key;
+						}
+						const t = el('table');
+						const hd = el('tr', null, null, t);
+						for (const c of ['Time', 'Missing a copy', 'Lost', 'Nodes not online']) el('th', null, c, hd);
+						for (const r of rows.reverse().slice(0, 60)) { const tr = el('tr', null, null, t); r.forEach(c => el('td', null, String(c), tr)); }
+						box.replaceChildren(t);
+						el('p', 'st-sub', 'One row per change in the selected range, newest first.', box);
+					};
+
+					// ---- chart 2: node lanes ----
+					const laneColor = s => s === 'down' ? css('--c-lost') : s === 'impaired' ? css('--c-degraded') : css('--c-up');
+					const drawLanes = () => {
+						const box = $('lanes'), ids = data.nodes.map(n => n.id).sort(byId);
+						const w = Math.max(280, box.clientWidth), rowH = 14, gap = 6, m = { l: 28, r: 34, t: 2, b: 18 };
+						const h = m.t + Math.max(1, ids.length) * (rowH + gap) - gap + m.b;
+						const f = frame(w, m);
+						const svg = svgEl('svg', { viewBox: `0 0 ${w} ${h}`, height: h, role: 'img', 'aria-label': 'Storage node status over time' });
+						ids.forEach((id, i) => {
+							const y0 = m.t + i * (rowH + gap);
+							svgEl('text', { x: m.l - 6, y: y0 + rowH - 3, 'text-anchor': 'end' }, svg).textContent = id;
+							for (const seg of segments()) {
+								let start = 0;
+								for (let j = 1; j <= seg.length; j++) {
+									const st = seg[start].n[id];
+									if (j < seg.length && seg[j].n[id] === st) continue;
+									const x1 = f.x(seg[start].t), x2 = Math.min(w - m.r, f.x(j < seg.length ? seg[j].t : seg[seg.length - 1].t + 1000));
+									if (st) svgEl('rect', { x: x1, y: y0, width: Math.max(1, x2 - x1 - (j < seg.length ? 2 : 0)), height: rowH, rx: 3, fill: laneColor(st) }, svg);
+									start = j;
+								}
+							}
+							const cur = data.nodes.find(n => n.id === id);
+							svgEl('text', { x: w - m.r + 6, y: y0 + rowH - 3 }, svg).textContent = cur.state === 'up' ? 'on' : cur.state === 'down' ? 'off' : '!';
+						});
+						timeAxis(svg, f, h);
+						overlay(svg, 'lanes', w, h, m, py => ids[Math.floor((py - m.t) / (rowH + gap))]);
+						charts.lanes = { svg, f, h, m };
+						box.replaceChildren(svg);
+					};
+
+					// ---- shared crosshair + time tooltip ----
+					const updateCross = () => {
+						for (const c of Object.values(charts)) c.svg.querySelector('.xh')?.remove();
+						if (!hover || !data?.samples.length) { if (!hover) hideTip(); return; }
+						const p = nearest(hover.t);
+						for (const [key, c] of Object.entries(charts)) {
+							if (!c.svg.isConnected) continue;
+							const g = svgEl('g', { class: 'xh', 'pointer-events': 'none' }, c.svg);
+							const x = c.f.x(p.t);
+							svgEl('line', { x1: x, x2: x, y1: c.m.t, y2: c.h - c.m.b, stroke: css('--text'), 'stroke-opacity': 0.35 }, g);
+							if (key === 'missing') {
+								svgEl('circle', { cx: x, cy: c.y(p.d), r: 4, fill: css('--c-degraded'), stroke: css('--c-surface'), 'stroke-width': 2 }, g);
+								if (p.l > 0) svgEl('circle', { cx: x, cy: c.y(p.d + p.l), r: 4, fill: css('--c-lost'), stroke: css('--c-surface'), 'stroke-width': 2 }, g);
+							}
+						}
+						if (!hover.ev) return hideTip();
+						showTip(hover.ev, t => {
+							el('div', 't', hms(p.t), t);
+							if (hover.row) {
+								const r = el('div', 'row', null, t);
+								el('i', null, null, r).style.background = laneColor(p.n[hover.row]);
+								el('b', null, hover.row, r);
+								el('span', 'muted', stateName[p.n[hover.row]] || 'not in cluster', r);
+							}
+							tipRow(t, css('--c-degraded'), p.d, 'missing a copy');
+							tipRow(t, css('--c-lost'), p.l, 'lost');
+							const off = Object.entries(p.n).filter(([, s]) => s !== 'up').map(([id]) => id).sort(byId);
+							el('div', 'muted', off.length ? 'Not online: ' + off.join(', ') : 'All nodes online', t);
+							for (const e of data.events.filter(e => Math.abs(e.t - p.t) <= 1500)) {
+								el('div', 'ev', `${icons[e.k] || '•'} ${e.text}`, t);
+							}
+						});
+					};
+
+					// ---- headline ----
+					const drawStatus = () => {
+						const box = $('status');
+						const off = data.nodes.filter(n => n.state !== 'up');
+						let cls = 'ok', icon = '✓', text = 'Fully redundant', since = '';
+						if (data.err) { cls = 'bad'; icon = '✕'; text = 'Metadata unreachable'; since = 'retrying…'; }
+						else if (data.lost > 0) { cls = 'bad'; icon = '✕'; text = `${data.lost} chunk${data.lost > 1 ? 's' : ''} lost`; since = 'no live copy left'; }
+						else if (data.under > 0 || data.healingMs > 0) { cls = 'warn'; icon = '↻'; text = `Repairing ${data.under} chunk${data.under === 1 ? '' : 's'}`; since = data.healingMs ? 'for ' + dur(data.healingMs) : ''; }
+						else if (off.length) since = `${off.map(n => n.id).join(', ')} not online · data already re-replicated`;
+						if (!changed('status', [cls, text, since])) return;
+						box.replaceChildren();
+						el('span', 'dot ' + cls, null, box);
+						el('span', null, `${icon} ${text}`, box);
+						if (since) el('span', 'since', since, box);
+					};
+					const drawKpis = () => {
+						const total = data.totalChunks, healthy = total - data.under - data.lost;
+						const pct = total ? Math.floor(healthy / total * 1000) / 10 : 100;
+						const up = data.nodes.filter(n => n.state === 'up').length;
+						const tiles = [
+							['hero', 'Chunks fully redundant', pct + '%', `${healthy} of ${total} chunks have every copy`, pct],
+							['', 'Nodes online', `${up}/${data.nodes.length}`, data.nodes.length - up ? `${data.nodes.length - up} impaired or offline` : 'all healthy'],
+							['', 'Last recovery', data.mttrMs ? dur(data.mttrMs) : '–', `${data.repairs} repairs · ${data.rebalances} moves`],
+							['', 'Stored', bytes(data.logical), `${data.objects} objects`],
+							['', 'Storage overhead', data.logical ? (data.raw / data.logical).toFixed(2) + '×' : '–', `${bytes(data.raw)} on disk`],
+						];
+						if (!changed('kpis', tiles)) return;
+						const box = $('kpis');
+						box.replaceChildren();
+						for (const [cls, label, value, sub, meter] of tiles) {
+							const k = el('div', 'kpi ' + cls, null, box);
+							el('div', 'label', label, k);
+							el('div', 'value', value, k);
+							el('div', 'sub', sub, k);
+							if (meter != null) el('i', null, null, el('div', 'meter', null, k)).style.width = meter + '%';
+						}
+					};
+
+					// ---- chunks per node (click → actions) ----
+					const drawBars = () => {
+						const box = $('bars'), nodes = data.nodes.slice().sort((a, b) => byId(a.id, b.id));
+						const maxC = Math.max(1, ...nodes.map(n => n.chunks));
+						for (const r of [...box.children]) if (!nodes.some(n => n.id === r.dataset.node)) r.remove();
+						nodes.forEach((n, i) => {
+							let b = box.querySelector(`[data-node="${CSS.escape(n.id)}"]`);
+							if (!b) {
+								b = el('button', 'bar-row');
+								b.dataset.ctx = 'node';
+								b.dataset.node = n.id;
+								el('span', 'who', null, b);
+								el('span', 'fill', null, el('span', 'track', null, b)).style.display = 'block';
+								el('span', 'val', null, b);
+								b.addEventListener('click', () => { sel = sel === n.id ? null : n.id; sigs.panel = null; drawBars(); drawPanel(); });
+								b.addEventListener('pointermove', ev => {
+									const cur = data.nodes.find(x => x.id === n.id);
+									if (!cur) return;
+									showTip(ev, t => {
+										el('div', 't', `${cur.id} · zone ${cur.zone}`, t);
+										tipRow(t, css('--c-bar'), cur.chunks, 'chunks');
+										el('div', null, `${bytes(cur.used)} on disk`, t);
+										el('div', 'muted', stateName[cur.state], t);
+									});
+								});
+								b.addEventListener('pointerleave', hideTip);
+							}
+							if (box.children[i] !== b) box.insertBefore(b, box.children[i] || null);
+							b.className = 'bar-row' + (n.state === 'down' ? ' off' : '') + (sel === n.id ? ' sel' : '');
+							b.dataset.alive = String(n.state !== 'down');
+							b.dataset.slow = String(n.slow);
+							b.dataset.cutMeta = String(n.partitioned.includes('meta'));
+							b.setAttribute('aria-label', `${n.id}, zone ${n.zone}, ${n.chunks} chunks, ${stateName[n.state]}`);
+							const who = b.querySelector('.who');
+							who.textContent = n.id;
+							el('small', null, n.zone, who);
+							b.querySelector('.fill').style.width = (n.chunks / maxC * 100) + '%';
+							b.querySelector('.val').textContent = `${n.chunks} · ${bytes(n.used)}${n.state === 'up' ? '' : ' · ' + stateName[n.state].toLowerCase()}`;
+						});
+					};
+					const act = async (url, msg) => { if (await post(url, msg)) refresh(); };
+					const drawPanel = () => {
+						const p = $('nodepanel'), n = data.nodes.find(n => n.id === sel);
+						if (!n) { p.hidden = true; sigs.panel = null; return; }
+						if (!changed('panel', [n.id, n.state, n.slow, n.partitioned, data.nodes.map(x => x.id)])) return;
+						p.hidden = false;
+						p.replaceChildren();
+						el('div', null, `${n.id} · zone ${n.zone} · ${n.addr} · ${stateName[n.state]}`, p);
+						const row = el('div', 'row', null, p);
+						const btn = (label, cls, url, msg) => { const b = el('button', 'btn xs ' + cls, label, row); b.onclick = () => act(url, msg); };
+						if (n.state === 'down') btn('Revive', '', `/ui/nodes/${n.id}/revive`, `${n.id} revived`);
+						else btn('Kill', 'red', `/ui/nodes/${n.id}/kill`, `${n.id} killed`);
+						btn('Corrupt a chunk', '', `/ui/nodes/${n.id}/corrupt`, `Flipped a byte on ${n.id}`);
+						btn(n.slow ? 'Make fast' : 'Make slow', n.slow ? 'on' : '', `/ui/nodes/${n.id}/slow`, n.slow ? `${n.id} is fast` : `${n.id} is slow`);
+						const chips = el('div', 'row', null, p);
+						el('span', 'muted', 'Cut link to', chips);
+						for (const peer of data.nodes.map(x => x.id).filter(x => x !== n.id).sort(byId).concat('meta', 'gateway')) {
+							const on = n.partitioned.includes(peer);
+							const b = el('button', 'btn xs' + (on ? ' on' : ''), peer, chips);
+							b.setAttribute('aria-pressed', String(on));
+							b.onclick = () => act(`/ui/nodes/${n.id}/partition?peer=${encodeURIComponent(peer)}`, on ? `Restored ${n.id} ↔ ${peer}` : `Cut ${n.id} ↔ ${peer}`);
+						}
+					};
+
+					// ---- activity feed ----
+					const drawFeed = () => {
+						const evs = data.events.slice().reverse().slice(0, 40);
+						if (!changed('feed', evs)) return;
+						const box = $('feed');
+						box.replaceChildren();
+						if (!evs.length) { el('li', 'empty', 'Nothing yet. Kill a node or upload a file and watch this fill in.', box); return; }
+						for (const e of evs) {
+							const li = el('li', e.k, null, box);
+							el('time', null, hms(e.t), li);
+							el('span', 'ic', icons[e.k] || '•', li);
+							el('span', null, e.text, li);
+							li.addEventListener('pointerenter', () => { hover = { t: e.t }; updateCross(); });
+							li.addEventListener('pointerleave', () => { hover = null; updateCross(); });
+						}
+					};
+
+					// ---- raft + chunk map ----
+					const drawRaft = () => {
+						if (!changed('raft', data.raft)) return;
+						const box = $('raft');
+						box.replaceChildren();
+						for (const r of data.raft.slice().sort((a, b) => byId(a.id, b.id))) {
+							const m = el('div', 'member' + (r.state === 'Leader' ? ' leader' : ''), null, box);
+							el('span', 'dot ' + (!r.up ? 'bad' : r.state === 'Leader' ? 'ok' : 'idle'), null, m);
+							el('b', null, (r.state === 'Leader' ? '★ ' : '') + r.id, m);
+							el('span', 'muted', r.up ? `${r.state} · term ${r.term}` : 'unreachable', m);
+						}
+					};
+					const drawMap = () => {
+						const ids = data.nodes.map(n => n.id).sort(byId);
+						const alive = Object.fromEntries(data.nodes.map(n => [n.id, n.state !== 'down']));
+						if (!changed('map', [data.chunks, alive])) return;
+						const box = $('map');
+						box.replaceChildren();
+						const hd = el('div', 'r hd', null, box);
+						el('code', null, '', hd);
+						ids.forEach(id => el('span', null, id, hd));
+						for (const c of data.chunks) {
+							const r = el('div', 'r', null, box);
+							el('code', null, c.sha.slice(0, 10), r);
+							for (const id of ids) {
+								const has = c.holders.includes(id), state = has ? (alive[id] ? 'ok' : 'stale') : '';
+								const cell = el('span', 'c ' + state, null, r);
+								cell.addEventListener('pointermove', ev => showTip(ev, t => {
+									el('div', 't', c.sha.slice(0, 16) + '…', t);
+									el('div', null, `${id}: ${state === 'ok' ? 'holds a copy' : state === 'stale' ? 'copy on an offline node' : 'no copy'}`, t);
+									el('div', 'muted', `wants ${c.want} copies`, t);
+								}));
+								cell.addEventListener('pointerleave', hideTip);
+							}
+						}
+					};
+
+					// ---- controls + polling ----
+					const render = () => {
+						drawStatus(); drawKpis();
+						if (table) drawTable(); else drawMissing();
+						drawLanes(); drawBars(); drawPanel(); drawFeed(); drawRaft();
+						$('mapsub').textContent = `${data.totalChunks} chunks${data.moreChunks > 0 ? ` (first ${data.chunks.length} shown)` : ''}`;
+						if ($('mapbox').open) drawMap();
+						updateCross();
+					};
+					const refresh = async () => {
+						if (!root.isConnected) return clearInterval(timer);
+						if (document.hidden) return;
+						try {
+							const r = await fetch(`/app/stats/data?range=${range}`, { cache: 'no-store' });
+							data = await r.json();
+						} catch {
+							root.classList.add('stale'); // keep the last frame, dimmed, until the next poll works
+							return;
+						}
+						root.classList.remove('stale');
+						render();
+					};
+					root.querySelectorAll('[data-range]').forEach(b => b.addEventListener('click', () => {
+						range = +b.dataset.range;
+						root.querySelectorAll('[data-range]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+						refresh();
+					}));
+					$('tabletoggle').addEventListener('click', e => {
+						table = !table;
+						e.currentTarget.setAttribute('aria-pressed', String(table));
+						e.currentTarget.classList.toggle('on', table);
+						$('missing').hidden = table; $('table').hidden = !table;
+						if (table) charts.missing?.svg.remove(), delete charts.missing;
+						if (data) render();
+					});
+					$('stepdown').addEventListener('click', () => act('/ui/meta/stepdown', 'Election forced'));
+					$('mapbox').addEventListener('toggle', () => { sigs.map = null; if (data && $('mapbox').open) drawMap(); });
+					let lastW = 0;
+					new ResizeObserver(([e]) => { const w = Math.round(e.contentRect.width); if (data && w !== lastW) { lastW = w; render(); } }).observe(root);
+					timer = setInterval(refresh, 1000);
+					refresh();
+				};
+				document.body.addEventListener('htmx:afterSettle', e => e.target.querySelectorAll?.('[data-stats]:not([data-mounted])').forEach(mountStats));
+
 				// Start with the two apps that tell the story side by side.
 				const half = desk.clientWidth / 2;
-				openApp('files', 'Files', '/app/files', desk.clientWidth > 1100 ? [Math.max(16, half - 660), 24] : null);
-				openApp('stats', 'Stats', '/app/stats', desk.clientWidth > 1100 ? [half, 24] : null);
+				openApp('files', 'Files', '/app/files', desk.clientWidth > 1100 ? [Math.max(16, half - 640), 24] : null);
+				openApp('stats', 'Stats', '/app/stats', desk.clientWidth > 1100 ? [half - 20, 12] : null);
 			})();
 			</script>
 		</body>
@@ -767,96 +1250,64 @@ templ ViewerApp(v Viewer) {
 // ---- Stats ----
 
 templ StatsApp() {
-	<div hx-get="/app/stats/live" hx-trigger="load, every 1s" hx-swap="innerHTML"></div>
-}
-
-templ StatsLive(c Cluster) {
-	{{ label, class := c.Health() }}
-	<div class="health"><span class={ "dot", class }></span>{ label }</div>
-	if c.Err != "" {
-		<p class="err">{ c.Err }</p>
-	}
-	<div class="stats">
-		<div class="stat"><b>{ fmt.Sprint(c.Objects) }</b><span>objects</span></div>
-		<div class="stat"><b>{ c.Logical }</b><span>stored</span></div>
-		<div class="stat"><b>{ c.Raw }</b><span>on disk</span></div>
-		<div class="stat"><b>{ c.Overhead }</b><span>overhead</span></div>
-		<div class="stat"><b>{ fmt.Sprint(c.TotalChunks) }</b><span>chunks</span></div>
-		<div class="stat"><b>{ fmt.Sprint(c.Under) }</b><span>under-replicated</span></div>
-		<div class="stat"><b>{ fmt.Sprint(c.Repairs) }</b><span>repairs</span></div>
-		<div class="stat"><b>{ c.MTTR }</b><span>last repair time</span></div>
-	</div>
-	<h3>Storage nodes · { c.AliveNodes() }</h3>
-	<div class="nodes">
-		for _, n := range c.Nodes {
-			<div class={ "node", templ.KV("dead", !n.Alive) } data-ctx="node" data-node={ n.ID } data-alive={ fmt.Sprint(n.Alive) } data-slow={ fmt.Sprint(n.SlowMs > 0) } data-cut-meta={ fmt.Sprint(n.PartitionedFrom("meta")) }>
-				<div>
-					if n.Alive {
-						<span class={ "dot", templ.KV("warn", len(n.Partitioned) > 0 || n.SlowMs > 0) }></span>
-					} else {
-						<span class="dot bad"></span>
-					}
-					<span class="id">{ n.ID }</span>
-					<span class="muted">· zone { n.Zone } · { fmt.Sprint(n.Chunks) } chunks · { n.Used }</span>
-					if n.Down {
-						<span class="muted">· killed</span>
-					} else if !n.Alive {
-						<span class="muted">· unreachable</span>
-					}
-				</div>
-				<div class="row" style="gap:4px">
-					if n.Down || !n.Alive {
-						<button class="btn xs" hx-post={ "/ui/nodes/" + n.ID + "/revive" } hx-swap="none" title="Clears an injected kill; a crashed process must be restarted">Revive</button>
-					} else {
-						<button class="btn xs red" hx-post={ "/ui/nodes/" + n.ID + "/kill" } hx-swap="none">Kill</button>
-					}
-					<button class="btn xs" hx-post={ "/ui/nodes/" + n.ID + "/corrupt" } hx-swap="none">Corrupt</button>
-					<button class={ "btn xs", templ.KV("on", n.SlowMs > 0) } hx-post={ "/ui/nodes/" + n.ID + "/slow" } hx-swap="none">Slow</button>
-				</div>
-				<div class="chips">
-					<span class="muted">cut link to</span>
-					for _, p := range n.Peers {
-						<button class={ "btn xs", templ.KV("on", n.PartitionedFrom(p)) } hx-post={ "/ui/nodes/" + n.ID + "/partition?peer=" + p } hx-swap="none">{ p }</button>
-					}
-				</div>
+	<div class="st" data-stats>
+		<div class="st-top">
+			<div class="st-status" data-el="status"><span class="dot idle"></span>Connecting…</div>
+			<div class="seg" role="group" aria-label="Time range">
+				<button data-range="60">1m</button>
+				<button data-range="300" aria-pressed="true">5m</button>
+				<button data-range="900">15m</button>
 			</div>
-		}
-	</div>
-	<h3>Metadata · Raft</h3>
-	<div class="row">
-		for _, r := range c.Raft {
-			if r.Up {
-				<span><span class={ "dot", templ.KV("idle", r.State != "Leader") }></span>{ r.ID } <span class="muted">{ r.State } · t{ fmt.Sprint(r.Term) }</span></span>
-			} else {
-				<span><span class="dot bad"></span>{ r.ID } <span class="muted">down</span></span>
-			}
-		}
-		<span style="flex:1"></span>
-		<button class="btn xs" hx-post="/ui/meta/stepdown" hx-swap="none">Force election</button>
-	</div>
-	<h3>Chunk placement</h3>
-	<div class="heat">
-		<div class="hhead">
-			<i></i>
-			for _, n := range c.Nodes {
-				<span>{ n.ID }</span>
-			}
 		</div>
-		for _, r := range c.Rows {
-			<div class={ "hrow", r.State }>
-				<code>{ r.SHA[:10] }</code>
-				for _, cell := range r.Cells {
-					<div class={ "cell", cell }></div>
-				}
-			</div>
-		}
+		<div class="st-kpis" data-el="kpis"></div>
+		<section class="st-card">
+			<header>
+				<h4>Chunks missing a copy</h4>
+				<div class="legend">
+					<span><i class="key k-degraded"></i>Missing a copy · repairing</span>
+					<span><i class="key k-lost"></i>Lost · no live copy</span>
+				</div>
+				<button class="btn xs" data-el="tabletoggle" aria-pressed="false">Table</button>
+			</header>
+			<p class="st-sub">Flat at zero means every chunk has all its copies. A failure shows as a spike; its width is the time to repair.</p>
+			<div class="chart" data-el="missing"></div>
+			<div class="st-table" data-el="table" hidden></div>
+		</section>
+		<section class="st-card">
+			<header>
+				<h4>Storage nodes</h4>
+				<div class="legend">
+					<span><i class="key k-up"></i>Online</span>
+					<span><i class="key k-impaired"></i>Impaired</span>
+					<span><i class="key k-down"></i>Offline</span>
+				</div>
+			</header>
+			<div class="chart" data-el="lanes"></div>
+		</section>
+		<div class="st-cols">
+			<section class="st-card">
+				<header><h4>Chunks per node</h4><span class="st-sub">Click a node for actions</span></header>
+				<div class="bars" data-el="bars"></div>
+				<div class="nodepanel" data-el="nodepanel" hidden></div>
+			</section>
+			<section class="st-card">
+				<header><h4>Activity</h4></header>
+				<ol class="feed" data-el="feed"></ol>
+			</section>
+		</div>
+		<section class="st-card">
+			<header>
+				<h4>Metadata · Raft</h4>
+				<button class="btn xs" data-el="stepdown">Force election</button>
+			</header>
+			<div class="raft" data-el="raft"></div>
+		</section>
+		<details class="st-card" data-el="mapbox">
+			<summary><h4>Chunk map</h4><span class="st-sub" data-el="mapsub"></span></summary>
+			<div class="cmap" data-el="map"></div>
+		</details>
+		<div class="st-tip" data-el="tip" role="tooltip" hidden></div>
 	</div>
-	if c.MoreChunks > 0 {
-		<p class="muted">+ { fmt.Sprint(c.MoreChunks) } more chunks</p>
-	}
-	if len(c.Rows) == 0 {
-		<p class="muted">No chunks yet. Upload something in Files.</p>
-	}
 }
 
 // ---- Connect ----

@@ -13,52 +13,24 @@ import (
 var Static embed.FS
 
 type Node struct {
-	ID, Zone, Addr string
-	Alive, Down    bool
-	Partitioned    []string
-	SlowMs         uint32
-	Used           string
-	Chunks         int64
-	Peers          []string // ids this node could be partitioned from
-}
-
-func (n Node) PartitionedFrom(peer string) bool {
-	for _, p := range n.Partitioned {
-		if p == peer {
-			return true
-		}
-	}
-	return false
+	ID    string
+	Alive bool
 }
 
 type Raft struct {
-	ID, State, Leader string
-	Term, Index       uint64
-	Up                bool
+	ID     string `json:"id"`
+	State  string `json:"state"`
+	Leader string `json:"leader"`
+	Term   uint64 `json:"term"`
+	Index  uint64 `json:"index"`
+	Up     bool   `json:"up"`
 }
 
-// Cell states for the chunk heatmap.
-const (
-	CellNone  = ""
-	CellOK    = "ok"
-	CellStale = "stale" // held by a node that is currently dead
-)
-
-type ChunkRow struct {
-	SHA   string
-	Cells []string
-	State string // ok | degraded | lost
-}
-
+// Cluster is what the menu-bar pulse needs.
 type Cluster struct {
-	Err                                   string
-	Nodes                                 []Node
-	Raft                                  []Raft
-	Rows                                  []ChunkRow
-	MoreChunks                            int64
-	Objects, TotalChunks, Under, Lost     int64
-	Repairs, Rebalances                   int64
-	Logical, Raw, Overhead, MTTR, Healing string
+	Err, Healing string
+	Nodes        []Node
+	Lost         int64
 }
 
 // Health is the one-line summary shown in the top bar and Stats.
