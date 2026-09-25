@@ -141,12 +141,12 @@ func (g *Gateway) sampleOnce(ctx context.Context) {
 		}
 		switch {
 		case s.Degraded > 0 && h.degraded == 0:
-			h.logLocked("bad", fmt.Sprintf("%d chunks lost a copy, repairing", s.Degraded))
+			h.logLocked("bad", fmt.Sprintf("%d pieces lost a copy, repairing", s.Degraded))
 		case s.Degraded == 0 && h.degraded > 0 && s.Lost == 0:
-			h.logLocked("good", fmt.Sprintf("Full redundancy restored in %s", (time.Duration(st.GetLastMttrMs())*time.Millisecond).Round(100*time.Millisecond)))
+			h.logLocked("good", fmt.Sprintf("All copies rebuilt in %s", (time.Duration(st.GetLastMttrMs())*time.Millisecond).Round(100*time.Millisecond)))
 		}
 		if s.Lost > 0 && h.lost == 0 {
-			h.logLocked("bad", fmt.Sprintf("%d chunks have no live copy", s.Lost))
+			h.logLocked("bad", fmt.Sprintf("%d pieces have no live copy", s.Lost))
 		}
 		if d := st.GetObjects() - h.objects; d > 0 {
 			h.logLocked("info", fmt.Sprintf("%d object%s written", d, plural(d)))

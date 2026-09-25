@@ -40,9 +40,13 @@ func (g *Gateway) uiHandler() http.Handler {
 		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
 		ui.PresentApp(ui.DeckAt(n)).Render(r.Context(), w)
 	})
+	mux.HandleFunc("GET /app/present/live", g.presentLive)
 	mux.HandleFunc("POST /ui/demo/heal", g.demoHeal)
-	mux.HandleFunc("POST /ui/demo/setup", g.demoSetup)
 	mux.HandleFunc("POST /ui/demo/readall", g.demoReadAll)
+	mux.HandleFunc("POST /ui/demo/sample", g.demoSample)
+	mux.HandleFunc("POST /ui/demo/crash", g.demoCrash)
+	mux.HandleFunc("POST /ui/demo/corrupt", g.demoCorrupt)
+	mux.HandleFunc("POST /ui/demo/partition", g.demoPartition)
 	mux.HandleFunc("GET /ui/leader", g.uiLeader)
 	mux.HandleFunc("POST /ui/nodes/{id}/{action}", g.uiFault)
 	mux.HandleFunc("POST /ui/meta/stepdown", g.uiStepDown)
@@ -349,10 +353,20 @@ func (g *Gateway) raftViews(ctx context.Context) []ui.Raft {
 
 func (g *Gateway) uiFault(w http.ResponseWriter, r *http.Request) {
 	id, action := r.PathValue("id"), r.PathValue("action")
+	if _, err := g.applyFault(r.Context(), id, action, r.URL.Query().Get("peer")); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	say(w, "%s: %s applied", id, action)
+}
+
+// applyFault updates one node's injected faults (kill, revive, slow, partition
+// from peer, or corrupt one chunk) and logs it to the activity feed. It returns
+// the corrupted chunk's sha for "corrupt".
+func (g *Gateway) applyFault(ctx context.Context, id, action, peer string) (string, error) {
 	n := g.nodeByID()[id]
 	if n == nil {
-		http.Error(w, "unknown node", http.StatusNotFound)
-		return
+		return "", fmt.Errorf("unknown node %q", id)
 	}
 	g.faultMu.Lock()
 	f := g.faults[id]
@@ -372,7 +386,6 @@ func (g *Gateway) uiFault(w http.ResponseWriter, r *http.Request) {
 			f.SlowMs = 800
 		}
 	case "partition":
-		peer := r.URL.Query().Get("peer")
 		if i := slices.Index(f.PartitionedFrom, peer); i >= 0 {
 			f.PartitionedFrom = slices.Delete(f.PartitionedFrom, i, i+1)
 		} else if peer != "" {
@@ -381,22 +394,20 @@ func (g *Gateway) uiFault(w http.ResponseWriter, r *http.Request) {
 	case "corrupt":
 	default:
 		g.faultMu.Unlock()
-		http.Error(w, "unknown action", http.StatusBadRequest)
-		return
+		return "", fmt.Errorf("unknown action %q", action)
 	}
 	req := &vaultv1.SetFaultRequest{Down: f.Down, PartitionedFrom: slices.Clone(f.PartitionedFrom), SlowMs: f.SlowMs, Corrupt: action == "corrupt"}
 	g.faultMu.Unlock()
 
-	var resp *vaultv1.SetFaultResponse
 	conn, err := g.pool.Get(n.GetAddr())
-	if err == nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		resp, err = vaultv1.NewNodeServiceClient(conn).SetFault(ctx, req)
-		cancel()
-	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return "", err
+	}
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := vaultv1.NewNodeServiceClient(conn).SetFault(cctx, req)
+	cancel()
+	if err != nil {
+		return "", err
 	}
 	switch action {
 	case "kill":
@@ -404,7 +415,7 @@ func (g *Gateway) uiFault(w http.ResponseWriter, r *http.Request) {
 	case "revive":
 		g.hist.log("chaos", "You revived %s", id)
 	case "corrupt":
-		g.hist.log("chaos", "You flipped a byte in chunk %.8s on %s", resp.GetCorruptedSha256(), id)
+		g.hist.log("chaos", "You flipped a byte in piece %.8s on %s", resp.GetCorruptedSha256(), id)
 	case "slow":
 		if req.SlowMs > 0 {
 			g.hist.log("chaos", "You slowed %s to %dms per call", id, req.SlowMs)
@@ -412,14 +423,13 @@ func (g *Gateway) uiFault(w http.ResponseWriter, r *http.Request) {
 			g.hist.log("chaos", "You made %s fast again", id)
 		}
 	case "partition":
-		peer := r.URL.Query().Get("peer")
 		if slices.Contains(req.PartitionedFrom, peer) {
 			g.hist.log("chaos", "You cut the link %s ↔ %s", id, peer)
 		} else {
 			g.hist.log("chaos", "You restored the link %s ↔ %s", id, peer)
 		}
 	}
-	fmt.Fprintf(w, "%s: %s applied", id, action)
+	return resp.GetCorruptedSha256(), nil
 }
 
 func (g *Gateway) uiStepDown(w http.ResponseWriter, r *http.Request) {
@@ -432,7 +442,7 @@ func (g *Gateway) uiStepDown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.hist.log("chaos", "You forced a metadata leader election")
-	fmt.Fprint(w, "leadership handed to another member")
+	say(w, "Done. The librarians are electing a new leader; watch the ★ move.")
 }
 
 // ---- Present demo actions ----
@@ -457,19 +467,11 @@ func (g *Gateway) demoHeal(w http.ResponseWriter, r *http.Request) {
 		healed++
 	}
 	g.hist.log("chaos", "You cleared all injected faults")
-	fmt.Fprintf(w, "cleared faults on %d nodes", healed)
+	msg := fmt.Sprintf("All servers are back and the network is healed (%d servers).", healed)
 	if failed > 0 {
-		fmt.Fprintf(w, " (%d unreachable: processes that were really stopped need restarting)", failed)
+		msg += fmt.Sprintf(" %d did not answer: their processes were really stopped and need a restart.", failed)
 	}
-}
-
-func (g *Gateway) demoSetup(w http.ResponseWriter, r *http.Request) {
-	err := g.createBucket(r.Context(), "photos", 3, 2)
-	if err != nil && !strings.Contains(err.Error(), "BucketAlreadyOwnedByYou") {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	fmt.Fprint(w, "bucket “photos” ready (3 copies, 2 acks); upload into it from Files or the aws CLI")
+	say(w, "%s", msg)
 }
 
 // demoReadAll reads every object end to end; each chunk's SHA-256 is verified on the way.
@@ -518,10 +520,10 @@ func (g *Gateway) demoReadAll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if failed > 0 {
-		fmt.Fprintf(w, "read %d objects: %d FAILED", objects, failed)
+		say(w, "Opened %d files: %d could not be read.", objects, failed)
 		return
 	}
-	fmt.Fprintf(w, "read %d objects (%s) in %s: every chunk verified", objects, ui.Bytes(bytes), time.Since(start).Round(time.Millisecond))
+	say(w, "Opened all %d files (%s) in %s. Every piece matched its fingerprint ✓", objects, ui.Bytes(bytes), time.Since(start).Round(time.Millisecond))
 }
 
 // uiLeader prints the Raft leader's id, for `scripts/demo.sh kill $(curl …/ui/leader)`.
