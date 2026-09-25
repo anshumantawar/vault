@@ -1,0 +1,727 @@
+package ui
+
+import "fmt"
+
+// Desktop is the whole OS shell; apps load into windows via htmx.
+templ Desktop() {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Vault OS</title>
+			<link rel="icon" href="data:,"/>
+			<script>
+				// Apply the saved theme before first paint, so there's no flash.
+				try { const t = localStorage.getItem('vault-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+			</script>
+			<script src="/static/htmx.min.js"></script>
+			<style>
+				:root {
+					color-scheme: light dark;
+					--bg: #eceae6; --win: #fbfaf8; --text: #1c1b19; --muted: #7a766f; --line: #dedad3; --soft: #f1efeb;
+					--ok: #2f9e5b; --warn: #d4870b; --bad: #d64534; --idle: #d7d3cc; --accent: #1c1b19;
+					--shadow: 0 1px 2px rgba(0,0,0,.06), 0 12px 32px rgba(0,0,0,.10);
+				}
+				:root[data-theme="light"] { color-scheme: light; }
+				@media (prefers-color-scheme: dark) {
+					:root:not([data-theme="light"]) {
+						--bg: #121212; --win: #1c1c1c; --text: #ecebe8; --muted: #8d8a84; --line: #2c2c2c; --soft: #242424;
+						--ok: #46c07a; --warn: #f0a531; --bad: #f0634f; --idle: #333; --accent: #ecebe8;
+						--shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.5);
+					}
+				}
+				:root[data-theme="dark"] {
+					color-scheme: dark;
+					--bg: #121212; --win: #1c1c1c; --text: #ecebe8; --muted: #8d8a84; --line: #2c2c2c; --soft: #242424;
+					--ok: #46c07a; --warn: #f0a531; --bad: #f0634f; --idle: #333; --accent: #ecebe8;
+					--shadow: 0 1px 2px rgba(0,0,0,.4), 0 16px 40px rgba(0,0,0,.5);
+				}
+				.theme { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+				.theme button { border: 0; background: transparent; padding: 2px 9px; font-size: 11px; cursor: pointer; color: var(--muted); }
+				.theme button[aria-pressed="true"] { background: var(--text); color: var(--win); }
+				.deck { height: 100%; display: flex; flex-direction: column; gap: 14px; }
+				.slide { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+				.slide h1 { font-size: 26px; line-height: 1.2; margin: 0; letter-spacing: -.01em; }
+				.slide h2 { font-size: 20px; margin: 0; }
+				.slide .kicker { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+				.slide p, .slide li { font-size: 14px; line-height: 1.55; }
+				.slide ul, .slide ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+				.cover { justify-content: center; align-items: flex-start; }
+				.cover h1 { font-size: 56px; }
+				.cover .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+				.tag { border: 1px solid var(--line); border-radius: 99px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
+				blockquote { margin: 0; padding: 4px 0 4px 16px; border-left: 3px solid var(--text); display: grid; gap: 10px; }
+				blockquote p { margin: 0; font-size: 16px !important; }
+				.req { display: grid; grid-template-columns: minmax(150px, 34%) 1fr; gap: 0; }
+				.req > div { padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+				.req > div:nth-child(odd) { font-weight: 600; padding-right: 12px; }
+				.arch { display: grid; gap: 10px; }
+				.tier { display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: center; }
+				.tier > span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+				.boxes { display: flex; gap: 6px; flex-wrap: wrap; }
+				.box { border: 1px solid var(--line); background: var(--soft); border-radius: 7px; padding: 6px 10px; font-size: 12px; }
+				.box.strong { background: var(--text); color: var(--win); border-color: var(--text); }
+				.arrow { color: var(--muted); padding-left: 120px; font-size: 12px; }
+				.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+				table.grid-t { border-collapse: collapse; width: 100%; font-size: 13px; }
+				table.grid-t th, table.grid-t td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
+				table.grid-t th { color: var(--muted); font-weight: 500; font-size: 11px; }
+				.say { display: grid; gap: 8px; }
+				.watch { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--soft); font-size: 13px; }
+				.cmd { display: flex; gap: 6px; align-items: flex-start; }
+				.cmd pre { flex: 1; margin: 0; white-space: pre-wrap; word-break: break-all; }
+				#deck-out:not(:empty) { font-size: 12px; color: var(--muted); }
+				.deck-nav { display: flex; align-items: center; gap: 8px; flex: none; }
+				.deck-nav .bar { flex: 1; height: 3px; background: var(--soft); border-radius: 2px; overflow: hidden; }
+				.deck-nav .bar i { display: block; height: 100%; background: var(--text); }
+				.win:fullscreen { border-radius: 0; resize: none; }
+				.win:fullscreen .win-body { padding: 5vh 8vw; }
+				.win:fullscreen .slide { font-size: 1.3em; }
+				.win:fullscreen .slide h1 { font-size: 40px; }
+				.win:fullscreen .cover h1 { font-size: 88px; }
+				.win:fullscreen .slide p, .win:fullscreen .slide li, .win:fullscreen .req > div { font-size: 18px; }
+				.win:fullscreen blockquote p { font-size: 22px !important; }
+				* { box-sizing: border-box; }
+				html, body { height: 100%; margin: 0; }
+				body { background: var(--bg); color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; overflow: hidden; }
+				button, input, select { font: inherit; color: inherit; }
+				#bar { position: fixed; inset: 0 0 auto 0; height: 32px; display: flex; align-items: center; gap: 16px; padding: 0 14px; background: var(--win); border-bottom: 1px solid var(--line); z-index: 100000; }
+				#bar .brand { font-weight: 650; letter-spacing: .02em; }
+				#bar .spacer { flex: 1; }
+				#bar .muted, .muted { color: var(--muted); }
+				.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; }
+				.dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); } .dot.idle { background: var(--idle); }
+				#desk { position: fixed; inset: 32px 0 64px 0; }
+				#dock { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; gap: 6px; padding: 6px; background: var(--win); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); z-index: 100000; }
+				#dock button { border: 0; background: transparent; border-radius: 10px; padding: 6px 12px; cursor: pointer; display: grid; justify-items: center; gap: 2px; }
+				#dock button:hover { background: var(--soft); }
+				#dock .ico { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; font-weight: 700; font-size: 12px; background: var(--text); color: var(--win); }
+				#dock span:last-child { font-size: 11px; color: var(--muted); }
+				.win { position: absolute; display: flex; flex-direction: column; min-width: 280px; min-height: 180px; max-width: 100%; max-height: 100%; background: var(--win); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); resize: both; overflow: hidden; }
+				.win.active { border-color: var(--muted); }
+				.win-bar { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); cursor: grab; user-select: none; flex: none; }
+				.win-bar:active { cursor: grabbing; }
+				.win-title { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+				.win-x { border: 0; background: transparent; width: 24px; height: 24px; border-radius: 6px; cursor: pointer; color: var(--muted); font-size: 16px; line-height: 1; }
+				.win-x:hover { background: var(--soft); color: var(--text); }
+				.win-body { flex: 1; overflow: auto; padding: 14px; }
+				.btn { border: 1px solid var(--line); background: var(--win); border-radius: 7px; padding: 4px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+				.btn:hover { border-color: var(--muted); }
+				.btn.dark { background: var(--text); color: var(--win); border-color: var(--text); }
+				.btn.on { background: var(--warn); border-color: var(--warn); color: #fff; }
+				.btn.red { color: var(--bad); }
+				.btn.xs { padding: 1px 7px; font-size: 11px; }
+				input[type=text], select { border: 1px solid var(--line); background: var(--win); border-radius: 7px; padding: 4px 8px; }
+				h3 { margin: 18px 0 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+				h3:first-child { margin-top: 0; }
+				.err { color: var(--bad); margin: 0 0 10px; }
+				.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+				.files { min-height: 100%; display: flex; flex-direction: column; gap: 12px; border-radius: 8px; }
+				.files.over { outline: 2px dashed var(--muted); outline-offset: -2px; }
+				.toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+				.crumb { border: 0; background: transparent; padding: 2px 4px; cursor: pointer; border-radius: 5px; }
+				.crumb:hover { background: var(--soft); }
+				.crumb:last-of-type { font-weight: 600; }
+				.sep { color: var(--muted); }
+				.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+				.tile { border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 8px 6px; cursor: pointer; display: grid; justify-items: center; gap: 6px; text-align: center; min-width: 0; }
+				.tile:hover { background: var(--soft); border-color: var(--line); }
+				.thumb { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; background: var(--soft); border: 1px solid var(--line); }
+				.badge { width: 52px; height: 64px; border-radius: 6px; border: 1px solid var(--line); background: var(--soft); display: grid; place-items: end center; padding-bottom: 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--muted); }
+				.folder { width: 64px; height: 48px; margin-top: 10px; border-radius: 6px; background: var(--idle); position: relative; }
+				.folder::before { content: ""; position: absolute; left: 0; top: -6px; width: 26px; height: 10px; border-radius: 4px 4px 0 0; background: var(--idle); }
+				.folder.bucket { background: var(--text); } .folder.bucket::before { background: var(--text); }
+				.tile .name { font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+				.tile .sub { font-size: 11px; color: var(--muted); margin-top: -4px; }
+				.empty { flex: 1; display: grid; place-items: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; padding: 32px; text-align: center; }
+				.upload-form progress { display: none; width: 90px; height: 6px; }
+				.upload-form.htmx-request progress { display: inline-block; }
+				.upload-form.htmx-request label { display: none; }
+				.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 14px 10px; }
+				.stat b { display: block; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+				.stat span { font-size: 11px; color: var(--muted); }
+				.health { display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+				.nodes { display: grid; gap: 6px; }
+				.node { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+				.node.dead { background: color-mix(in srgb, var(--bad) 7%, transparent); }
+				.node .id { font-weight: 600; }
+				.chips { grid-column: 1 / -1; display: flex; gap: 4px; flex-wrap: wrap; align-items: center; font-size: 11px; }
+				.heat { display: grid; gap: 2px; overflow-x: auto; }
+				.hrow { display: flex; gap: 2px; align-items: center; }
+				.hrow code, .hhead i { width: 76px; flex: none; font: 10px ui-monospace, monospace; color: var(--muted); }
+				.hrow.degraded code { color: var(--warn); } .hrow.lost code { color: var(--bad); }
+				.hhead { display: flex; gap: 2px; }
+				.hhead span { width: 22px; flex: none; font-size: 10px; text-align: center; color: var(--muted); }
+				.cell { width: 22px; height: 10px; flex: none; border-radius: 2px; background: var(--soft); }
+				.cell.ok { background: var(--ok); } .cell.stale { background: var(--bad); opacity: .55; }
+				.viewer { display: grid; gap: 14px; }
+				.preview { display: grid; place-items: center; background: var(--soft); border-radius: 8px; min-height: 160px; overflow: hidden; }
+				.preview img, .preview video { max-width: 100%; max-height: 320px; display: block; }
+				.preview iframe { width: 100%; height: 280px; border: 0; background: #fff; }
+				.preview audio { width: 90%; }
+				table.kv { border-collapse: collapse; width: 100%; }
+				table.kv td { padding: 3px 0; vertical-align: top; }
+				table.kv td:first-child { color: var(--muted); width: 90px; }
+				code, .mono { font: 11px ui-monospace, monospace; word-break: break-all; }
+				.chunk { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+				.pill { font-size: 10px; padding: 0 6px; border-radius: 99px; background: var(--ok); color: #fff; }
+				.pill.down { background: var(--idle); color: var(--muted); text-decoration: line-through; }
+				pre { background: var(--soft); border-radius: 8px; padding: 10px; overflow-x: auto; font: 11px/1.6 ui-monospace, monospace; margin: 6px 0 0; }
+				@media (max-width: 700px) {
+					.win { left: 6px !important; right: 6px; width: auto !important; top: 6px !important; height: calc(100% - 12px) !important; resize: none; }
+				}
+			</style>
+		</head>
+		<body>
+			<div id="bar">
+				<span class="brand">Vault OS</span>
+				<span class="muted">S3-compatible, self-healing object storage</span>
+				<span class="spacer"></span>
+				<span hx-get="/app/pulse" hx-trigger="load, every 2s"><span class="dot idle"></span></span>
+				<span class="theme" role="group" aria-label="Theme">
+					<button data-theme-set="system">System</button>
+					<button data-theme-set="light">Light</button>
+					<button data-theme-set="dark">Dark</button>
+				</span>
+				<span id="clock" class="muted"></span>
+			</div>
+			<div id="desk"></div>
+			<nav id="dock">
+				<button data-open="files" data-title="Files" data-url="/app/files"><span class="ico">F</span><span>Files</span></button>
+				<button data-open="stats" data-title="Stats" data-url="/app/stats"><span class="ico">S</span><span>Stats</span></button>
+				<button data-open="connect" data-title="Connect" data-url="/app/connect"><span class="ico">$</span><span>Connect</span></button>
+				<button data-open="present" data-title="Present" data-url="/app/present?n=0"><span class="ico">P</span><span>Present</span></button>
+			</nav>
+			<template id="win-tpl">
+				<div class="win">
+					<div class="win-bar"><span class="win-title"></span><button class="win-x" title="Close">×</button></div>
+					<div class="win-body"></div>
+				</div>
+			</template>
+			<script>
+			(() => {
+				const desk = document.getElementById('desk');
+				const sizes = { files: [640, 480], stats: [560, 640], connect: [460, 340], present: [880, 600] };
+				let z = 10, cascade = 0;
+
+				const focus = win => {
+					desk.querySelectorAll('.win.active').forEach(w => w.classList.remove('active'));
+					win.style.zIndex = ++z;
+					win.classList.add('active');
+				};
+
+				window.openApp = (key, title, url, pos) => {
+					let win = [...desk.children].find(w => w.dataset.key === key);
+					if (win) return focus(win);
+					win = document.getElementById('win-tpl').content.firstElementChild.cloneNode(true);
+					win.dataset.key = key;
+					win.querySelector('.win-title').textContent = title;
+					const [w, h] = sizes[key] || [520, 460];
+					const off = (cascade++ % 6) * 26;
+					Object.assign(win.style, {
+						width: Math.min(w, desk.clientWidth - 16) + 'px',
+						height: Math.min(h, desk.clientHeight - 16) + 'px',
+						left: (pos ? pos[0] : 120 + off) + 'px',
+						top: (pos ? pos[1] : 24 + off) + 'px',
+					});
+					desk.appendChild(win);
+					focus(win);
+					const body = win.querySelector('.win-body');
+					// Each window is its own request source; sharing <body> makes htmx drop concurrent loads.
+					htmx.ajax('GET', url, { source: body, target: body, swap: 'innerHTML' });
+				};
+				window.closeWin = el => el.closest('.win')?.remove();
+
+				document.addEventListener('click', e => {
+					const o = e.target.closest('[data-open]');
+					if (o) openApp(o.dataset.open, o.dataset.title, o.dataset.url);
+					if (e.target.closest('.win-x')) closeWin(e.target);
+				});
+
+				// Focus and drag windows by their title bar.
+				desk.addEventListener('pointerdown', e => {
+					const win = e.target.closest('.win');
+					if (!win) return;
+					focus(win);
+					const bar = e.target.closest('.win-bar');
+					if (!bar || e.target.closest('button')) return;
+					const dx = e.clientX - win.offsetLeft, dy = e.clientY - win.offsetTop;
+					const move = m => {
+						win.style.left = Math.max(-win.offsetWidth + 80, Math.min(m.clientX - dx, desk.clientWidth - 80)) + 'px';
+						win.style.top = Math.max(0, Math.min(m.clientY - dy, desk.clientHeight - 34)) + 'px';
+					};
+					const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+					addEventListener('pointermove', move);
+					addEventListener('pointerup', up);
+				});
+
+				// Upload: pick with the button, or drop files anywhere on a Files window.
+				const submitFiles = (files, zone) => {
+					const form = zone.querySelector('.upload-form');
+					if (!form || !files.length) return;
+					const input = form.querySelector('input[type=file]');
+					if (input.files !== files) input.files = files;
+					htmx.trigger(form, 'submit');
+				};
+				document.addEventListener('change', e => {
+					if (e.target.matches('.upload-form input[type=file]')) submitFiles(e.target.files, e.target.closest('.files'));
+				});
+				document.addEventListener('dragover', e => {
+					const zone = e.target.closest('.files');
+					e.preventDefault();
+					document.querySelectorAll('.files.over').forEach(f => f !== zone && f.classList.remove('over'));
+					zone?.classList.add('over');
+				});
+				document.addEventListener('dragleave', e => { if (!e.relatedTarget) document.querySelectorAll('.files.over').forEach(f => f.classList.remove('over')); });
+				document.addEventListener('drop', e => {
+					e.preventDefault();
+					const zone = e.target.closest('.files');
+					document.querySelectorAll('.files.over').forEach(f => f.classList.remove('over'));
+					if (zone) submitFiles(e.dataTransfer.files, zone);
+				});
+				document.body.addEventListener('htmx:xhr:progress', e => {
+					const p = e.target.querySelector?.('progress');
+					if (p && e.detail.lengthComputable) p.value = e.detail.loaded / e.detail.total;
+				});
+
+				// Theme: System follows the OS; Light/Dark are remembered in this browser.
+				const applyTheme = t => {
+					if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+					else delete document.documentElement.dataset.theme;
+					document.querySelectorAll('[data-theme-set]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.themeSet === (t || 'system'))));
+				};
+				let saved = 'system';
+				try { saved = localStorage.getItem('vault-theme') || 'system'; } catch {}
+				applyTheme(saved);
+				document.addEventListener('click', e => {
+					const b = e.target.closest('[data-theme-set]');
+					if (!b) return;
+					applyTheme(b.dataset.themeSet);
+					try { localStorage.setItem('vault-theme', b.dataset.themeSet); } catch {}
+				});
+
+				// Present: arrow keys / space step through slides; F toggles fullscreen.
+				document.addEventListener('keydown', e => {
+					const win = desk.querySelector('.win.active[data-key="present"]');
+					if (!win || e.target.closest?.('input, select, textarea')) return;
+					const go = sel => { const b = win.querySelector(sel); if (b) { e.preventDefault(); b.click(); } };
+					if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') go('[data-nav="next"]');
+					if (e.key === 'ArrowLeft' || e.key === 'PageUp') go('[data-nav="prev"]');
+					if (e.key === 'f') toggleFull(win);
+				});
+				window.toggleFull = el => {
+					const win = el.closest('.win');
+					if (document.fullscreenElement) document.exitFullscreen(); else win.requestFullscreen?.();
+				};
+				document.addEventListener('click', e => {
+					const c = e.target.closest('[data-copy]');
+					if (!c) return;
+					navigator.clipboard?.writeText(c.dataset.copy);
+					c.textContent = 'Copied';
+					setTimeout(() => c.textContent = 'Copy', 1200);
+				});
+
+				const clock = document.getElementById('clock');
+				const tick = () => clock.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+				tick(); setInterval(tick, 10000);
+
+				// Start with the two apps that tell the story side by side.
+				const half = desk.clientWidth / 2;
+				openApp('files', 'Files', '/app/files', desk.clientWidth > 1100 ? [Math.max(16, half - 660), 24] : null);
+				openApp('stats', 'Stats', '/app/stats', desk.clientWidth > 1100 ? [half, 24] : null);
+			})();
+			</script>
+		</body>
+	</html>
+}
+
+templ Pulse(c Cluster) {
+	{{ label, class := c.Health() }}
+	<span class={ "dot", class }></span>{ label } <span class="muted">· { c.AliveNodes() }</span>
+}
+
+// ---- Files ----
+
+templ FilesApp(f Files) {
+	<div class="files" hx-get={ f.URL() } hx-trigger="vault:changed from:body" hx-swap="outerHTML">
+		<div class="toolbar">
+			for i, c := range f.Crumbs() {
+				if i > 0 {
+					<span class="sep">/</span>
+				}
+				<button class="crumb" hx-get={ c.URL } hx-target="closest .files" hx-swap="outerHTML">{ c.Name }</button>
+			}
+			<span style="flex:1"></span>
+			if f.Bucket != "" {
+				<span class="muted">{ f.Policy }</span>
+				<form class="upload-form" hx-post={ "/app/files/upload?bucket=" + urlq(f.Bucket) + "&prefix=" + urlq(f.Prefix) } hx-encoding="multipart/form-data" hx-target="closest .files" hx-swap="outerHTML">
+					<label class="btn dark">Upload<input type="file" name="files" multiple hidden/></label>
+					<progress max="1" value="0"></progress>
+				</form>
+			}
+		</div>
+		if f.Err != "" {
+			<p class="err">{ f.Err }</p>
+		}
+		if f.Bucket == "" {
+			<div class="grid">
+				for _, b := range f.Buckets {
+					<button class="tile" hx-get={ FilesURL(b.Name, "") } hx-target="closest .files" hx-swap="outerHTML">
+						<div class="folder bucket"></div>
+						<div class="name">{ b.Name }</div>
+						<div class="sub">{ b.Policy }</div>
+					</button>
+				}
+			</div>
+			<form class="row" hx-post="/app/files/bucket" hx-target="closest .files" hx-swap="outerHTML" style="margin-top:auto">
+				<input type="text" name="name" placeholder="new-bucket" required pattern="[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]"/>
+				<select name="policy">
+					<option value="3/2">3 copies · 2 acks</option>
+					<option value="2/1">2 copies · 1 ack</option>
+					<option value="1/1">1 copy · no redundancy</option>
+					<option value="5/3">5 copies · 3 acks</option>
+				</select>
+				<button class="btn" type="submit">Create bucket</button>
+			</form>
+		} else if len(f.Folders) == 0 && len(f.Objects) == 0 {
+			<div class="empty">
+				<div>
+					Drop any files here, or use Upload.
+					<br/>
+					if f.Prefix == "" {
+						<button class="btn red" style="margin-top:12px" hx-post={ "/app/files/dropbucket?bucket=" + urlq(f.Bucket) } hx-target="closest .files" hx-swap="outerHTML">Delete empty bucket</button>
+					}
+				</div>
+			</div>
+		} else {
+			<div class="grid">
+				for _, p := range f.Folders {
+					<button class="tile" hx-get={ FilesURL(f.Bucket, p) } hx-target="closest .files" hx-swap="outerHTML">
+						<div class="folder"></div>
+						<div class="name">{ FolderName(p) }</div>
+					</button>
+				}
+				for _, o := range f.Objects {
+					<button class="tile" data-open={ "view:" + o.Bucket + "/" + o.Key } data-title={ o.Name } data-url={ o.ViewURL() } title={ o.Key }>
+						if o.Kind() == "image" {
+							<img class="thumb" src={ o.URL() } alt="" loading="lazy"/>
+						} else {
+							<div class="badge">{ o.Ext() }</div>
+						}
+						<div class="name">{ o.Name }</div>
+						<div class="sub">{ o.Size }</div>
+					</button>
+				}
+			</div>
+		}
+	</div>
+}
+
+// ---- Viewer ----
+
+templ ViewerApp(v Viewer) {
+	<div class="viewer">
+		<div class="preview">
+			switch v.Kind() {
+				case "image":
+					<img src={ v.URL() } alt={ v.Name }/>
+				case "video":
+					<video src={ v.URL() } controls></video>
+				case "audio":
+					<audio src={ v.URL() } controls></audio>
+				case "doc":
+					<iframe src={ v.URL() } title={ v.Name }></iframe>
+				default:
+					<p class="muted">No preview for { v.Type }</p>
+			}
+		</div>
+		<table class="kv">
+			<tr><td>Name</td><td>{ v.Key }</td></tr>
+			<tr><td>Bucket</td><td>{ v.Bucket }</td></tr>
+			<tr><td>Type</td><td>{ v.Type }</td></tr>
+			<tr><td>Size</td><td>{ v.Size }</td></tr>
+			<tr><td>Modified</td><td>{ v.Modified }</td></tr>
+			<tr><td>ETag</td><td class="mono">{ v.ETag }</td></tr>
+		</table>
+		<div class="row">
+			<a class="btn" href={ templ.URL(v.URL()) } download={ v.Name }>Download</a>
+			<button class="btn red" hx-post={ "/app/files/delete?bucket=" + urlq(v.Bucket) + "&key=" + urlq(v.Key) } hx-confirm="Delete this object?" hx-swap="none" hx-on--after-request="if (event.detail.successful) closeWin(this)">Delete</button>
+		</div>
+		<div>
+			<h3>Where the bytes live · { fmt.Sprint(len(v.Chunks)) } chunks</h3>
+			for _, c := range v.Chunks {
+				<div class="chunk">
+					<span class="muted">#{ fmt.Sprint(c.N) }</span>
+					<code title={ c.SHA }>{ c.SHA[:12] }</code>
+					<span class="muted">{ c.Size }</span>
+					<span style="flex:1"></span>
+					for _, h := range c.Holders {
+						<span class={ "pill", templ.KV("down", !h.Alive) }>{ h.ID }</span>
+					}
+				</div>
+			}
+		</div>
+	</div>
+}
+
+// ---- Stats ----
+
+templ StatsApp() {
+	<div hx-get="/app/stats/live" hx-trigger="load, every 1s" hx-swap="innerHTML"></div>
+}
+
+templ StatsLive(c Cluster) {
+	{{ label, class := c.Health() }}
+	<div class="health"><span class={ "dot", class }></span>{ label }</div>
+	if c.Err != "" {
+		<p class="err">{ c.Err }</p>
+	}
+	<div class="stats">
+		<div class="stat"><b>{ fmt.Sprint(c.Objects) }</b><span>objects</span></div>
+		<div class="stat"><b>{ c.Logical }</b><span>stored</span></div>
+		<div class="stat"><b>{ c.Raw }</b><span>on disk</span></div>
+		<div class="stat"><b>{ c.Overhead }</b><span>overhead</span></div>
+		<div class="stat"><b>{ fmt.Sprint(c.TotalChunks) }</b><span>chunks</span></div>
+		<div class="stat"><b>{ fmt.Sprint(c.Under) }</b><span>under-replicated</span></div>
+		<div class="stat"><b>{ fmt.Sprint(c.Repairs) }</b><span>repairs</span></div>
+		<div class="stat"><b>{ c.MTTR }</b><span>last repair time</span></div>
+	</div>
+	<h3>Storage nodes · { c.AliveNodes() }</h3>
+	<div class="nodes">
+		for _, n := range c.Nodes {
+			<div class={ "node", templ.KV("dead", !n.Alive) }>
+				<div>
+					if n.Alive {
+						<span class={ "dot", templ.KV("warn", len(n.Partitioned) > 0 || n.SlowMs > 0) }></span>
+					} else {
+						<span class="dot bad"></span>
+					}
+					<span class="id">{ n.ID }</span>
+					<span class="muted">· zone { n.Zone } · { fmt.Sprint(n.Chunks) } chunks · { n.Used }</span>
+					if n.Down {
+						<span class="muted">· killed</span>
+					} else if !n.Alive {
+						<span class="muted">· unreachable</span>
+					}
+				</div>
+				<div class="row" style="gap:4px">
+					if n.Down || !n.Alive {
+						<button class="btn xs" hx-post={ "/ui/nodes/" + n.ID + "/revive" } hx-swap="none" title="Clears an injected kill; a crashed process must be restarted">Revive</button>
+					} else {
+						<button class="btn xs red" hx-post={ "/ui/nodes/" + n.ID + "/kill" } hx-swap="none">Kill</button>
+					}
+					<button class="btn xs" hx-post={ "/ui/nodes/" + n.ID + "/corrupt" } hx-swap="none">Corrupt</button>
+					<button class={ "btn xs", templ.KV("on", n.SlowMs > 0) } hx-post={ "/ui/nodes/" + n.ID + "/slow" } hx-swap="none">Slow</button>
+				</div>
+				<div class="chips">
+					<span class="muted">cut link to</span>
+					for _, p := range n.Peers {
+						<button class={ "btn xs", templ.KV("on", n.PartitionedFrom(p)) } hx-post={ "/ui/nodes/" + n.ID + "/partition?peer=" + p } hx-swap="none">{ p }</button>
+					}
+				</div>
+			</div>
+		}
+	</div>
+	<h3>Metadata · Raft</h3>
+	<div class="row">
+		for _, r := range c.Raft {
+			if r.Up {
+				<span><span class={ "dot", templ.KV("idle", r.State != "Leader") }></span>{ r.ID } <span class="muted">{ r.State } · t{ fmt.Sprint(r.Term) }</span></span>
+			} else {
+				<span><span class="dot bad"></span>{ r.ID } <span class="muted">down</span></span>
+			}
+		}
+		<span style="flex:1"></span>
+		<button class="btn xs" hx-post="/ui/meta/stepdown" hx-swap="none">Force election</button>
+	</div>
+	<h3>Chunk placement</h3>
+	<div class="heat">
+		<div class="hhead">
+			<i></i>
+			for _, n := range c.Nodes {
+				<span>{ n.ID }</span>
+			}
+		</div>
+		for _, r := range c.Rows {
+			<div class={ "hrow", r.State }>
+				<code>{ r.SHA[:10] }</code>
+				for _, cell := range r.Cells {
+					<div class={ "cell", cell }></div>
+				}
+			</div>
+		}
+	</div>
+	if c.MoreChunks > 0 {
+		<p class="muted">+ { fmt.Sprint(c.MoreChunks) } more chunks</p>
+	}
+	if len(c.Rows) == 0 {
+		<p class="muted">No chunks yet. Upload something in Files.</p>
+	}
+}
+
+// ---- Connect ----
+
+templ ConnectApp(endpoint, accessKey string) {
+	<p>Vault speaks the S3 API. Point any S3 tool at it:</p>
+	<pre>{ "export AWS_ENDPOINT_URL=http://" + endpoint + "\nexport AWS_ACCESS_KEY_ID=" + accessKey + "\nexport AWS_SECRET_ACCESS_KEY=$VAULT_SECRET_KEY\nexport AWS_DEFAULT_REGION=us-east-1" }</pre>
+	<pre>{ "aws s3 mb s3://photos\naws s3 sync ./pics s3://photos/\naws s3 ls s3://photos/\naws s3 cp s3://photos/cat.jpg ." }</pre>
+	<p class="muted">Uploads from the CLI show up in Files; every write lands on 3 nodes in different zones.</p>
+}
+
+// ---- Present ----
+
+templ PresentApp(d Deck) {
+	<div class="deck">
+		<div class={ "slide", templ.KV("cover", d.Kind == "cover") }>
+			switch d.Kind {
+				case "cover":
+					@coverSlide()
+				case "problem":
+					<span class="kicker">The brief</span>
+					<h1>{ d.Title }</h1>
+					<blockquote>
+						for _, p := range ProblemStatement {
+							<p>{ p }</p>
+						}
+					</blockquote>
+				case "requirements":
+					<span class="kicker">Every clause, answered</span>
+					<h1>{ d.Title }</h1>
+					<div class="req">
+						for _, r := range Requirements {
+							<div>{ r.Need }</div>
+							<div>{ r.How }</div>
+						}
+					</div>
+				case "architecture":
+					@archSlide()
+				case "dataflow":
+					@dataflowSlide()
+				case "healing":
+					@healingSlide()
+				case "durability":
+					@durabilitySlide()
+				case "step":
+					<span class="kicker">{ d.DemoLabel() }</span>
+					<h1>{ d.Title }</h1>
+					<div class="say">
+						for _, line := range d.Step.Say {
+							<p style="margin:0">{ line }</p>
+						}
+					</div>
+					if len(d.Step.Actions) > 0 {
+						<div class="row">
+							for _, a := range d.Step.Actions {
+								<button class={ "btn", templ.KV("red", a.Danger), templ.KV("dark", !a.Danger) } hx-post={ a.Post } hx-target="#deck-out" hx-swap="innerHTML">{ a.Label }</button>
+							}
+							<span id="deck-out"></span>
+						</div>
+					}
+					for _, c := range d.Step.Cmds {
+						<div class="cmd">
+							<pre>{ c }</pre>
+							<button class="btn xs" data-copy={ c }>Copy</button>
+						</div>
+					}
+					if d.Step.Watch != "" {
+						<div class="watch"><b>Watch:</b> { d.Step.Watch }</div>
+					}
+			}
+		</div>
+		<div class="deck-nav">
+			<button class="btn" data-nav="prev" hx-get={ d.URL(d.N - 1) } hx-target="closest .deck" hx-swap="outerHTML" disabled?={ !d.HasPrev() }>← Prev</button>
+			<div class="bar"><i style={ fmt.Sprintf("width:%d%%", (d.N+1)*100/d.Total) }></i></div>
+			<span class="muted">{ d.Progress() }</span>
+			<button class="btn" onclick="toggleFull(this)" title="Fullscreen (F)">⤢</button>
+			<button class="btn dark" data-nav="next" hx-get={ d.URL(d.N + 1) } hx-target="closest .deck" hx-swap="outerHTML" disabled?={ !d.HasNext() }>Next →</button>
+		</div>
+	</div>
+}
+
+templ coverSlide() {
+	<div style="display:contents">
+		<span class="kicker">Hackathon · distributed systems</span>
+		<h1>Vault</h1>
+		<p style="font-size:18px;margin:0;max-width:34em">Fault-tolerant, self-healing object storage that speaks S3, built in Go.</p>
+		<div class="tags">
+			<span class="tag">S3 API + SigV4</span>
+			<span class="tag">Raft metadata</span>
+			<span class="tag">SHA-256 chunks</span>
+			<span class="tag">zone-aware replication</span>
+			<span class="tag">automatic repair</span>
+		</div>
+		<p class="muted" style="margin:0">Use ← → to move, F for fullscreen.</p>
+	</div>
+}
+
+templ archSlide() {
+	<span class="kicker">Three roles, one binary</span>
+	<h1>Architecture</h1>
+	<div class="arch">
+		<div class="tier"><span>Clients</span><div class="boxes"><div class="box">aws CLI</div><div class="box">boto3 / SDKs</div><div class="box">rclone</div><div class="box">Vault OS</div></div></div>
+		<div class="arrow">↓ S3 over HTTP, SigV4-signed</div>
+		<div class="tier"><span>Gateways</span><div class="boxes"><div class="box strong">gateway</div><div class="box strong">gateway</div><div class="box">… stateless, scale out</div></div></div>
+		<div class="arrow">↓ gRPC: metadata to the Raft leader, bytes straight to nodes</div>
+		<div class="tier"><span>Metadata</span><div class="boxes"><div class="box strong">m1 · leader</div><div class="box">m2</div><div class="box">m3</div><div class="box">Raft: buckets, manifests, chunk locations</div></div></div>
+		<div class="tier"><span>Storage</span><div class="boxes"><div class="box">zone 1: n1 n4</div><div class="box">zone 2: n2 n5</div><div class="box">zone 3: n3</div><div class="box">… add nodes anytime</div></div></div>
+	</div>
+	<p class="muted" style="margin:0">Bytes never pass through metadata, so metadata load is one Raft entry per object, not per byte.</p>
+}
+
+templ dataflowSlide() {
+	<span class="kicker">Write once, verify always</span>
+	<h1>How bytes move</h1>
+	<div class="cols">
+		<div>
+			<h2>Write</h2>
+			<ol>
+				<li>Gateway checks the SigV4 signature and body checksums.</li>
+				<li>Cuts the stream into 4 MB chunks; names each by its SHA-256.</li>
+				<li>Sends each chunk to 3 nodes in different zones, in parallel.</li>
+				<li>Waits for W acknowledgements (default 2).</li>
+				<li>Commits the manifest through Raft, then answers 200.</li>
+			</ol>
+		</div>
+		<div>
+			<h2>Read</h2>
+			<ol>
+				<li>Fetch the manifest from the Raft leader.</li>
+				<li>For each chunk, try a live holder; re-hash every byte.</li>
+				<li>Dead, slow or corrupt copy? Use the next one and report it.</li>
+				<li>Range requests only touch the chunks they need.</li>
+			</ol>
+		</div>
+	</div>
+}
+
+templ healingSlide() {
+	<span class="kicker">No human in the loop</span>
+	<h1>Self-healing</h1>
+	<div class="cols">
+		<ul>
+			<li><b>Detect</b>: nodes heartbeat every second; silent for 3 s means dead.</li>
+			<li><b>Repair</b>: under-replicated chunks are copied node-to-node from any healthy holder, 16 at a time.</li>
+			<li><b>Scrub</b>: every node re-hashes its data at rest and quarantines anything that rotted.</li>
+		</ul>
+		<ul>
+			<li><b>Rebalance</b>: new nodes get their share; extra copies are trimmed after a node returns.</li>
+			<li><b>Collect</b>: unreferenced chunks are deleted, with tombstones so GC never races an upload.</li>
+			<li><b>Measure</b>: time from failure to full redundancy is shown live in Stats.</li>
+		</ul>
+	</div>
+}
+
+templ durabilitySlide() {
+	<span class="kicker">Predictable availability, chosen per bucket</span>
+	<h1>Durability is a choice</h1>
+	<table class="grid-t">
+		<tr><th>Policy (copies / acks)</th><th>Storage overhead</th><th>Survives losing</th><th>Good for</th></tr>
+		<tr><td>1 / 1</td><td>1×</td><td>nothing</td><td>scratch, caches</td></tr>
+		<tr><td>2 / 1</td><td>2×</td><td>1 node</td><td>re-creatable data</td></tr>
+		<tr><td><b>3 / 2 (default)</b></td><td>3×</td><td>2 nodes</td><td>most data</td></tr>
+		<tr><td>5 / 3</td><td>5×</td><td>4 nodes</td><td>critical records</td></tr>
+	</table>
+	<p style="margin:0">Overhead drops further with dedup: identical content is stored once, and server-side copies are metadata-only.</p>
+	<p class="muted" style="margin:0">Next: erasure coding (4+2 = 1.5× overhead) and sharding metadata across several Raft groups.</p>
+}

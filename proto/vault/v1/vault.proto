@@ -1,0 +1,326 @@
+syntax = "proto3";
+
+package vault.v1;
+
+option go_package = "vault/gen/vault/v1;vaultv1";
+
+// NodeService is a storage node. It stores immutable chunks named by the
+// hex SHA-256 of their content and never serves bytes that fail that hash.
+service NodeService {
+  // First frame carries sha256; every frame carries data.
+  rpc PutChunk(stream PutChunkRequest) returns (PutChunkResponse);
+  // Verified before the first frame is sent; DATA_LOSS on mismatch.
+  rpc GetChunk(GetChunkRequest) returns (stream GetChunkResponse);
+  rpc DeleteChunk(DeleteChunkRequest) returns (DeleteChunkResponse);
+  // Copy a local chunk to another node (repair / rebalance), node to node.
+  rpc PushChunk(PushChunkRequest) returns (PushChunkResponse);
+  rpc SetFault(SetFaultRequest) returns (SetFaultResponse);
+}
+
+message PutChunkRequest {
+  string sha256 = 1;
+  bytes data = 2;
+}
+
+message PutChunkResponse {
+  // Node-clock unix nanos of the chunk file's mtime after this write.
+  int64 written_at = 1;
+}
+
+message GetChunkRequest {
+  string sha256 = 1;
+}
+
+message GetChunkResponse {
+  bytes data = 1;
+}
+
+message DeleteChunkRequest {
+  string sha256 = 1;
+  // Delete only if the file's mtime is before this (node-clock unix nanos).
+  // Zero deletes unconditionally.
+  int64 if_written_before = 2;
+}
+
+message DeleteChunkResponse {}
+
+message PushChunkRequest {
+  string sha256 = 1;
+  string target_id = 2;
+  string target_addr = 3;
+}
+
+message PushChunkResponse {
+  int64 written_at = 1;
+}
+
+message SetFaultRequest {
+  // Replaces the node's fault state.
+  bool down = 1;
+  // Caller ids ("n2", "gateway", "meta") this node can't talk to, both ways.
+  repeated string partitioned_from = 2;
+  uint32 slow_ms = 3;
+  // One-shot action: flip a byte in this chunk's file. Empty picks a random chunk.
+  bool corrupt = 4;
+  string corrupt_sha256 = 5;
+}
+
+message SetFaultResponse {
+  string corrupted_sha256 = 1;
+}
+
+// MetaService is the Raft-replicated metadata group. Every RPC except
+// RaftStatus must be sent to the leader; followers return FAILED_PRECONDITION.
+service MetaService {
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc ReportCorrupt(ReportCorruptRequest) returns (ReportCorruptResponse);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+
+  rpc CreateBucket(CreateBucketRequest) returns (CreateBucketResponse);
+  rpc DeleteBucket(DeleteBucketRequest) returns (DeleteBucketResponse);
+  rpc GetBucket(GetBucketRequest) returns (GetBucketResponse);
+  rpc ListBuckets(ListBucketsRequest) returns (ListBucketsResponse);
+
+  rpc CommitObject(CommitObjectRequest) returns (CommitObjectResponse);
+  rpc GetObject(GetObjectRequest) returns (GetObjectResponse);
+  rpc DeleteObject(DeleteObjectRequest) returns (DeleteObjectResponse);
+  rpc CopyObject(CopyObjectRequest) returns (CopyObjectResponse);
+  rpc ListObjects(ListObjectsRequest) returns (ListObjectsResponse);
+
+  rpc CreateUpload(CreateUploadRequest) returns (CreateUploadResponse);
+  rpc CommitPart(CommitPartRequest) returns (CommitPartResponse);
+  rpc CompleteUpload(CompleteUploadRequest) returns (CompleteUploadResponse);
+  rpc AbortUpload(AbortUploadRequest) returns (AbortUploadResponse);
+
+  rpc ClusterStatus(ClusterStatusRequest) returns (ClusterStatusResponse);
+  rpc RaftStatus(RaftStatusRequest) returns (RaftStatusResponse);
+  rpc StepDown(StepDownRequest) returns (StepDownResponse);
+}
+
+message Node {
+  string id = 1;
+  string addr = 2;
+  string zone = 3;
+  bool alive = 4;
+  int64 used_bytes = 5;
+  int64 chunk_count = 6;
+  // Fault state as last reported by the node (for the UI).
+  bool down = 7;
+  repeated string partitioned_from = 8;
+  uint32 slow_ms = 9;
+}
+
+message HeartbeatRequest {
+  Node node = 1;
+}
+
+message HeartbeatResponse {}
+
+message ReportCorruptRequest {
+  string sha256 = 1;
+  string node_id = 2;
+}
+
+message ReportCorruptResponse {}
+
+message ListNodesRequest {}
+
+message ListNodesResponse {
+  repeated Node nodes = 1;
+}
+
+message Bucket {
+  string name = 1;
+  uint32 replicas = 2;
+  uint32 write_quorum = 3;
+  int64 created_at = 4;
+}
+
+message CreateBucketRequest {
+  Bucket bucket = 1;
+}
+
+message CreateBucketResponse {}
+
+message DeleteBucketRequest {
+  string name = 1;
+}
+
+message DeleteBucketResponse {}
+
+message GetBucketRequest {
+  string name = 1;
+}
+
+message GetBucketResponse {
+  Bucket bucket = 1;
+}
+
+message ListBucketsRequest {}
+
+message ListBucketsResponse {
+  repeated Bucket buckets = 1;
+}
+
+message Chunk {
+  string sha256 = 1;
+  int64 size = 2;
+  // Node ids holding a copy. Filled by the meta on reads.
+  repeated string holders = 3;
+  // Set by the writer: node-clock mtime reported by PutChunk (min over acks).
+  int64 written_at = 4;
+}
+
+message Object {
+  string bucket = 1;
+  string key = 2;
+  int64 size = 3;
+  string etag = 4;
+  string content_type = 5;
+  map<string, string> user_meta = 6;
+  int64 modified_at = 7;
+  repeated Chunk chunks = 8;
+}
+
+message CommitObjectRequest {
+  Object object = 1;
+}
+
+message CommitObjectResponse {
+  // Chunks the writer must re-put (a concurrent GC may have removed them),
+  // then retry. Empty on success.
+  repeated string retry_sha256 = 1;
+}
+
+message GetObjectRequest {
+  string bucket = 1;
+  string key = 2;
+}
+
+message GetObjectResponse {
+  Object object = 1;
+}
+
+message DeleteObjectRequest {
+  string bucket = 1;
+  string key = 2;
+}
+
+message DeleteObjectResponse {}
+
+message CopyObjectRequest {
+  string src_bucket = 1;
+  string src_key = 2;
+  string dst_bucket = 3;
+  string dst_key = 4;
+  // When replace_meta is set, content_type and user_meta replace the source's.
+  bool replace_meta = 5;
+  string content_type = 6;
+  map<string, string> user_meta = 7;
+}
+
+message CopyObjectResponse {
+  Object object = 1;
+}
+
+message ListObjectsRequest {
+  string bucket = 1;
+  string prefix = 2;
+  string delimiter = 3;
+  // Exclusive: list keys strictly after this.
+  string start_after = 4;
+  uint32 max_keys = 5;
+}
+
+message ListObjectsResponse {
+  // Objects without chunks.
+  repeated Object objects = 1;
+  repeated string common_prefixes = 2;
+  bool truncated = 3;
+  // Last key or prefix returned; pass as start_after to continue.
+  string next_start_after = 4;
+}
+
+message CreateUploadRequest {
+  string bucket = 1;
+  string key = 2;
+  string content_type = 3;
+  map<string, string> user_meta = 4;
+}
+
+message CreateUploadResponse {
+  string upload_id = 1;
+}
+
+message CommitPartRequest {
+  string upload_id = 1;
+  uint32 part_number = 2;
+  string etag = 3;
+  int64 size = 4;
+  repeated Chunk chunks = 5;
+}
+
+message CommitPartResponse {
+  repeated string retry_sha256 = 1;
+}
+
+message CompletedPart {
+  uint32 part_number = 1;
+  string etag = 2;
+}
+
+message CompleteUploadRequest {
+  string upload_id = 1;
+  repeated CompletedPart parts = 2;
+}
+
+message CompleteUploadResponse {
+  Object object = 1;
+}
+
+message AbortUploadRequest {
+  string upload_id = 1;
+}
+
+message AbortUploadResponse {}
+
+message ClusterStatusRequest {
+  // Max chunks to include in the heatmap.
+  uint32 max_chunks = 1;
+}
+
+message ChunkStatus {
+  string sha256 = 1;
+  uint32 want = 2;
+  repeated string holders = 3;
+}
+
+message ClusterStatusResponse {
+  repeated Node nodes = 1;
+  repeated ChunkStatus chunks = 2;
+  int64 objects = 3;
+  int64 logical_bytes = 4;
+  int64 raw_bytes = 5;
+  int64 total_chunks = 6;
+  int64 under_replicated = 7;
+  int64 lost = 8;
+  int64 repairs = 9;
+  int64 rebalances = 10;
+  int64 last_mttr_ms = 11;
+  // Unix nanos since redundancy was last incomplete; 0 when fully healthy.
+  int64 degraded_since = 12;
+}
+
+message RaftStatusRequest {}
+
+message RaftStatusResponse {
+  string id = 1;
+  string state = 2;
+  string leader_id = 3;
+  uint64 term = 4;
+  uint64 last_index = 5;
+}
+
+message StepDownRequest {}
+
+message StepDownResponse {}

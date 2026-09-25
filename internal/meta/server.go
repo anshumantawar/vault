@@ -1,0 +1,514 @@
+// Package meta is the Raft-replicated metadata service: buckets, object
+// manifests, chunk locations and multipart uploads. The leader also runs
+// the failure detector, repair, rebalance and GC loops.
+package meta
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"maps"
+	"net"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hashicorp/raft"
+	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	vaultv1 "vault/gen/vault/v1"
+	"vault/internal/wire"
+)
+
+type Config struct {
+	ID       string
+	GRPCAddr string
+	RaftAddr string
+	Dir      string
+	// Peers maps every member's id to its raft address, including this one.
+	Peers map[string]string
+}
+
+type Server struct {
+	vaultv1.UnimplementedMetaServiceServer
+	cfg  Config
+	raft *raft.Raft
+	fsm  *fsm
+	pool *wire.Pool
+
+	// Leader-only, in-memory: rebuilt from heartbeats after every election.
+	mu          sync.Mutex
+	lastSeen    map[string]time.Time
+	stats       map[string]*vaultv1.Node
+	inflight    map[string]bool
+	moves       int
+	repairs     int64
+	rebalances  int64
+	degraded    time.Time
+	lastHealthy time.Time
+	lastMTTR    time.Duration
+}
+
+// Run serves the meta member until ctx is cancelled.
+func Run(ctx context.Context, cfg Config) error {
+	if err := os.MkdirAll(cfg.Dir, 0o755); err != nil {
+		return err
+	}
+	s := &Server{
+		cfg: cfg, fsm: &fsm{st: newState()}, pool: wire.NewPool(),
+		lastSeen: map[string]time.Time{}, stats: map[string]*vaultv1.Node{}, inflight: map[string]bool{},
+	}
+	defer s.pool.Close()
+
+	rc := raft.DefaultConfig()
+	rc.LocalID = raft.ServerID(cfg.ID)
+	// Fast failover for a LAN demo: a new leader in about a second.
+	rc.HeartbeatTimeout = 500 * time.Millisecond
+	rc.ElectionTimeout = 500 * time.Millisecond
+	rc.LeaderLeaseTimeout = 250 * time.Millisecond
+	rc.CommitTimeout = 20 * time.Millisecond
+	rc.LogLevel = "WARN"
+	leaderCh := make(chan bool, 8)
+	rc.NotifyCh = leaderCh
+
+	store, err := raftboltdb.New(raftboltdb.Options{Path: filepath.Join(cfg.Dir, "raft.db")})
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	snaps, err := raft.NewFileSnapshotStore(cfg.Dir, 2, os.Stderr)
+	if err != nil {
+		return err
+	}
+	addr, err := net.ResolveTCPAddr("tcp", cfg.RaftAddr)
+	if err != nil {
+		return err
+	}
+	trans, err := raft.NewTCPTransport(cfg.RaftAddr, addr, 3, 5*time.Second, os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer trans.Close()
+	r, err := raft.NewRaft(rc, s.fsm, store, store, snaps, trans)
+	if err != nil {
+		return err
+	}
+	s.raft = r
+	if has, _ := raft.HasExistingState(store, store, snaps); !has {
+		var servers []raft.Server
+		for id, a := range cfg.Peers {
+			servers = append(servers, raft.Server{ID: raft.ServerID(id), Address: raft.ServerAddress(a)})
+		}
+		// Every member bootstraps with the identical config; raft tolerates that.
+		if err := r.BootstrapCluster(raft.Configuration{Servers: servers}).Error(); err != nil && !errors.Is(err, raft.ErrCantBootstrap) {
+			return err
+		}
+	}
+
+	lis, err := net.Listen("tcp", cfg.GRPCAddr)
+	if err != nil {
+		r.Shutdown()
+		return err
+	}
+	gs := grpc.NewServer()
+	vaultv1.RegisterMetaServiceServer(gs, s)
+
+	go s.watchLeadership(ctx, leaderCh)
+	go s.leaderLoops(ctx)
+	go func() {
+		<-ctx.Done()
+		gs.Stop()
+	}()
+	log.Printf("meta %s serving gRPC %s, raft %s", cfg.ID, cfg.GRPCAddr, cfg.RaftAddr)
+	err = gs.Serve(lis)
+	r.Shutdown().Error()
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
+var errNotLeader = status.Error(codes.FailedPrecondition, "not the raft leader")
+
+func (s *Server) leaderOnly() error {
+	if s.raft.State() != raft.Leader {
+		return errNotLeader
+	}
+	return nil
+}
+
+// read runs fn on the state after confirming this member is still leader,
+// so a deposed leader never serves stale metadata.
+func (s *Server) read(fn func(*state) error) error {
+	if err := s.raft.VerifyLeader().Error(); err != nil {
+		return errNotLeader
+	}
+	s.fsm.mu.RLock()
+	defer s.fsm.mu.RUnlock()
+	return fn(s.fsm.st)
+}
+
+func (s *Server) propose(c *command) (result, error) {
+	c.Now = time.Now().UnixNano()
+	b, err := json.Marshal(c)
+	if err != nil {
+		return result{}, err
+	}
+	f := s.raft.Apply(b, 5*time.Second)
+	if err := f.Error(); err != nil {
+		if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) {
+			return result{}, errNotLeader
+		}
+		return result{}, status.Error(codes.Unavailable, err.Error())
+	}
+	res := f.Response().(result)
+	return res, res.err
+}
+
+// ---- nodes ----
+
+func (s *Server) Heartbeat(_ context.Context, req *vaultv1.HeartbeatRequest) (*vaultv1.HeartbeatResponse, error) {
+	if err := s.leaderOnly(); err != nil {
+		return nil, err
+	}
+	n := req.GetNode()
+	if n.GetId() == "" || n.GetAddr() == "" {
+		return nil, status.Error(codes.InvalidArgument, "node id and addr required")
+	}
+	s.fsm.mu.RLock()
+	known := s.fsm.st.Nodes[n.GetId()]
+	s.fsm.mu.RUnlock()
+	if known == nil || known.Addr != n.GetAddr() || known.Zone != n.GetZone() {
+		if _, err := s.propose(&command{Op: "upsert_node", NodeID: n.GetId(), Node: &NodeInfo{Addr: n.GetAddr(), Zone: n.GetZone()}}); err != nil {
+			return nil, err
+		}
+		log.Printf("meta: node %s joined at %s (zone %s)", n.GetId(), n.GetAddr(), n.GetZone())
+	}
+	s.mu.Lock()
+	s.lastSeen[n.GetId()] = time.Now()
+	s.stats[n.GetId()] = n
+	s.mu.Unlock()
+	return &vaultv1.HeartbeatResponse{}, nil
+}
+
+func (s *Server) ReportCorrupt(_ context.Context, req *vaultv1.ReportCorruptRequest) (*vaultv1.ReportCorruptResponse, error) {
+	if err := s.leaderOnly(); err != nil {
+		return nil, err
+	}
+	_, err := s.propose(&command{Op: "remove_holder", SHA: req.GetSha256(), NodeID: req.GetNodeId()})
+	if err == nil {
+		log.Printf("meta: dropped bad copy of %.12s on %s; repair will replace it", req.GetSha256(), req.GetNodeId())
+	}
+	return &vaultv1.ReportCorruptResponse{}, err
+}
+
+const deadAfter = 3 * time.Second
+
+func (s *Server) nodes() []*vaultv1.Node {
+	s.fsm.mu.RLock()
+	infos := maps.Clone(s.fsm.st.Nodes)
+	s.fsm.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*vaultv1.Node
+	for id, info := range infos {
+		n := &vaultv1.Node{Id: id, Addr: info.Addr, Zone: info.Zone}
+		if st := s.stats[id]; st != nil {
+			n.UsedBytes, n.ChunkCount = st.UsedBytes, st.ChunkCount
+			n.PartitionedFrom, n.SlowMs = st.PartitionedFrom, st.SlowMs
+		}
+		n.Alive = time.Since(s.lastSeen[id]) < deadAfter
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Id < out[j].Id })
+	return out
+}
+
+func (s *Server) ListNodes(context.Context, *vaultv1.ListNodesRequest) (*vaultv1.ListNodesResponse, error) {
+	if err := s.leaderOnly(); err != nil {
+		return nil, err
+	}
+	return &vaultv1.ListNodesResponse{Nodes: s.nodes()}, nil
+}
+
+// ---- buckets ----
+
+func (s *Server) CreateBucket(_ context.Context, req *vaultv1.CreateBucketRequest) (*vaultv1.CreateBucketResponse, error) {
+	b := req.GetBucket()
+	if b.GetReplicas() == 0 || b.GetWriteQuorum() == 0 || b.GetWriteQuorum() > b.GetReplicas() {
+		return nil, status.Error(codes.InvalidArgument, "InvalidArgument")
+	}
+	_, err := s.propose(&command{Op: "create_bucket", Name: b.GetName(), Bucket: &Bucket{Replicas: b.GetReplicas(), WriteQuorum: b.GetWriteQuorum()}})
+	return &vaultv1.CreateBucketResponse{}, err
+}
+
+func (s *Server) DeleteBucket(_ context.Context, req *vaultv1.DeleteBucketRequest) (*vaultv1.DeleteBucketResponse, error) {
+	_, err := s.propose(&command{Op: "delete_bucket", Name: req.GetName()})
+	return &vaultv1.DeleteBucketResponse{}, err
+}
+
+func bucketPB(name string, b *Bucket) *vaultv1.Bucket {
+	return &vaultv1.Bucket{Name: name, Replicas: b.Replicas, WriteQuorum: b.WriteQuorum, CreatedAt: b.CreatedAt}
+}
+
+func (s *Server) GetBucket(_ context.Context, req *vaultv1.GetBucketRequest) (*vaultv1.GetBucketResponse, error) {
+	var out *vaultv1.Bucket
+	err := s.read(func(st *state) error {
+		b := st.Buckets[req.GetName()]
+		if b == nil {
+			return s3err(codes.NotFound, "NoSuchBucket")
+		}
+		out = bucketPB(req.GetName(), b)
+		return nil
+	})
+	return &vaultv1.GetBucketResponse{Bucket: out}, err
+}
+
+func (s *Server) ListBuckets(context.Context, *vaultv1.ListBucketsRequest) (*vaultv1.ListBucketsResponse, error) {
+	resp := &vaultv1.ListBucketsResponse{}
+	err := s.read(func(st *state) error {
+		for _, name := range slices.Sorted(maps.Keys(st.Buckets)) {
+			resp.Buckets = append(resp.Buckets, bucketPB(name, st.Buckets[name]))
+		}
+		return nil
+	})
+	return resp, err
+}
+
+// ---- objects ----
+
+func commitChunks(pb []*vaultv1.Chunk) ([]CommitChunk, error) {
+	out := make([]CommitChunk, len(pb))
+	for i, c := range pb {
+		if len(c.GetSha256()) != 64 || len(c.GetHolders()) == 0 {
+			return nil, status.Error(codes.InvalidArgument, "chunk needs sha256 and holders")
+		}
+		out[i] = CommitChunk{SHA: c.GetSha256(), Size: c.GetSize(), Holders: c.GetHolders(), WrittenAt: c.GetWrittenAt()}
+	}
+	return out, nil
+}
+
+func (s *Server) CommitObject(_ context.Context, req *vaultv1.CommitObjectRequest) (*vaultv1.CommitObjectResponse, error) {
+	o := req.GetObject()
+	chunks, err := commitChunks(o.GetChunks())
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.propose(&command{
+		Op: "commit_object", Name: o.GetBucket(), Key: o.GetKey(), Chunks: chunks,
+		Object: &Object{Size: o.GetSize(), ETag: o.GetEtag(), ContentType: o.GetContentType(), UserMeta: o.GetUserMeta(), Chunks: refs(chunks)},
+	})
+	return &vaultv1.CommitObjectResponse{RetrySha256: res.retry}, err
+}
+
+// objectPB converts an object, attaching current holders to each chunk.
+func objectPB(st *state, bucket, key string, o *Object, withChunks bool) *vaultv1.Object {
+	pb := &vaultv1.Object{
+		Bucket: bucket, Key: key, Size: o.Size, Etag: o.ETag, ContentType: o.ContentType,
+		UserMeta: o.UserMeta, ModifiedAt: o.ModifiedAt,
+	}
+	if withChunks {
+		for _, c := range o.Chunks {
+			ch := &vaultv1.Chunk{Sha256: c.SHA, Size: c.Size}
+			if info := st.Chunks[c.SHA]; info != nil {
+				ch.Holders = slices.Clone(info.Holders)
+			}
+			pb.Chunks = append(pb.Chunks, ch)
+		}
+	}
+	return pb
+}
+
+func (s *Server) GetObject(_ context.Context, req *vaultv1.GetObjectRequest) (*vaultv1.GetObjectResponse, error) {
+	var out *vaultv1.Object
+	err := s.read(func(st *state) error {
+		if st.Buckets[req.GetBucket()] == nil {
+			return s3err(codes.NotFound, "NoSuchBucket")
+		}
+		o := st.Objects[req.GetBucket()][req.GetKey()]
+		if o == nil {
+			return s3err(codes.NotFound, "NoSuchKey")
+		}
+		out = objectPB(st, req.GetBucket(), req.GetKey(), o, true)
+		return nil
+	})
+	return &vaultv1.GetObjectResponse{Object: out}, err
+}
+
+func (s *Server) DeleteObject(_ context.Context, req *vaultv1.DeleteObjectRequest) (*vaultv1.DeleteObjectResponse, error) {
+	_, err := s.propose(&command{Op: "delete_object", Name: req.GetBucket(), Key: req.GetKey()})
+	return &vaultv1.DeleteObjectResponse{}, err
+}
+
+func (s *Server) CopyObject(_ context.Context, req *vaultv1.CopyObjectRequest) (*vaultv1.CopyObjectResponse, error) {
+	res, err := s.propose(&command{
+		Op: "copy_object", Name: req.GetSrcBucket(), Key: req.GetSrcKey(), DstName: req.GetDstBucket(), DstKey: req.GetDstKey(),
+		Replace: req.GetReplaceMeta(), CType: req.GetContentType(), UserMeta: req.GetUserMeta(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &vaultv1.CopyObjectResponse{Object: objectPB(nil, req.GetDstBucket(), req.GetDstKey(), res.object, false)}, nil
+}
+
+func (s *Server) ListObjects(_ context.Context, req *vaultv1.ListObjectsRequest) (*vaultv1.ListObjectsResponse, error) {
+	max := int(req.GetMaxKeys())
+	if max <= 0 || max > 1000 {
+		max = 1000
+	}
+	resp := &vaultv1.ListObjectsResponse{}
+	err := s.read(func(st *state) error {
+		if st.Buckets[req.GetBucket()] == nil {
+			return s3err(codes.NotFound, "NoSuchBucket")
+		}
+		keys, prefixes, truncated := st.listObjects(req.GetBucket(), req.GetPrefix(), req.GetDelimiter(), req.GetStartAfter(), max)
+		for _, k := range keys {
+			resp.Objects = append(resp.Objects, objectPB(st, req.GetBucket(), k, st.Objects[req.GetBucket()][k], false))
+		}
+		resp.CommonPrefixes = prefixes
+		resp.Truncated = truncated
+		if truncated {
+			last := ""
+			if len(keys) > 0 {
+				last = keys[len(keys)-1]
+			}
+			if len(prefixes) > 0 && prefixes[len(prefixes)-1] > last {
+				// Skip past everything under the last prefix.
+				last = prefixes[len(prefixes)-1] + "\U0010FFFF"
+			}
+			resp.NextStartAfter = last
+		}
+		return nil
+	})
+	return resp, err
+}
+
+// ---- multipart ----
+
+func (s *Server) CreateUpload(_ context.Context, req *vaultv1.CreateUploadRequest) (*vaultv1.CreateUploadResponse, error) {
+	id := make([]byte, 16)
+	rand.Read(id)
+	uid := hex.EncodeToString(id)
+	_, err := s.propose(&command{Op: "create_upload", UploadID: uid, Name: req.GetBucket(), Key: req.GetKey(), CType: req.GetContentType(), UserMeta: req.GetUserMeta()})
+	return &vaultv1.CreateUploadResponse{UploadId: uid}, err
+}
+
+func (s *Server) CommitPart(_ context.Context, req *vaultv1.CommitPartRequest) (*vaultv1.CommitPartResponse, error) {
+	chunks, err := commitChunks(req.GetChunks())
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.propose(&command{Op: "commit_part", UploadID: req.GetUploadId(), PartNum: req.GetPartNumber(), ETag: strings.Trim(req.GetEtag(), `"`), Size: req.GetSize(), Chunks: chunks})
+	return &vaultv1.CommitPartResponse{RetrySha256: res.retry}, err
+}
+
+func (s *Server) CompleteUpload(_ context.Context, req *vaultv1.CompleteUploadRequest) (*vaultv1.CompleteUploadResponse, error) {
+	var parts []completedPart
+	for _, p := range req.GetParts() {
+		parts = append(parts, completedPart{Num: p.GetPartNumber(), ETag: p.GetEtag()})
+	}
+	s.fsm.mu.RLock()
+	u := s.fsm.st.Uploads[req.GetUploadId()]
+	var bucket, key string
+	if u != nil {
+		bucket, key = u.Bucket, u.Key
+	}
+	s.fsm.mu.RUnlock()
+	res, err := s.propose(&command{Op: "complete_upload", UploadID: req.GetUploadId(), Parts: parts})
+	if err != nil {
+		return nil, err
+	}
+	return &vaultv1.CompleteUploadResponse{Object: objectPB(nil, bucket, key, res.object, false)}, nil
+}
+
+func (s *Server) AbortUpload(_ context.Context, req *vaultv1.AbortUploadRequest) (*vaultv1.AbortUploadResponse, error) {
+	_, err := s.propose(&command{Op: "abort_upload", UploadID: req.GetUploadId()})
+	return &vaultv1.AbortUploadResponse{}, err
+}
+
+// ---- status ----
+
+func (s *Server) ClusterStatus(_ context.Context, req *vaultv1.ClusterStatusRequest) (*vaultv1.ClusterStatusResponse, error) {
+	if err := s.leaderOnly(); err != nil {
+		return nil, err
+	}
+	nodes := s.nodes()
+	alive := map[string]bool{}
+	resp := &vaultv1.ClusterStatusResponse{Nodes: nodes}
+	for _, n := range nodes {
+		alive[n.Id] = n.Alive
+		if n.Alive {
+			resp.RawBytes += n.UsedBytes
+		}
+	}
+	max := int(req.GetMaxChunks())
+	s.fsm.mu.RLock()
+	for _, objs := range s.fsm.st.Objects {
+		for _, o := range objs {
+			resp.Objects++
+			resp.LogicalBytes += o.Size
+		}
+	}
+	shas := slices.Sorted(maps.Keys(s.fsm.st.Chunks))
+	for _, sha := range shas {
+		ch := s.fsm.st.Chunks[sha]
+		if ch.Refs == 0 {
+			continue
+		}
+		resp.TotalChunks++
+		live := 0
+		for _, h := range ch.Holders {
+			if alive[h] {
+				live++
+			}
+		}
+		switch {
+		case live == 0:
+			resp.Lost++
+		case live < int(ch.Want):
+			resp.UnderReplicated++
+		}
+		if len(resp.Chunks) < max {
+			resp.Chunks = append(resp.Chunks, &vaultv1.ChunkStatus{Sha256: sha, Want: ch.Want, Holders: slices.Clone(ch.Holders)})
+		}
+	}
+	s.fsm.mu.RUnlock()
+	s.mu.Lock()
+	resp.Repairs, resp.Rebalances, resp.LastMttrMs = s.repairs, s.rebalances, s.lastMTTR.Milliseconds()
+	if !s.degraded.IsZero() {
+		resp.DegradedSince = s.degraded.UnixNano()
+	}
+	s.mu.Unlock()
+	return resp, nil
+}
+
+func (s *Server) RaftStatus(context.Context, *vaultv1.RaftStatusRequest) (*vaultv1.RaftStatusResponse, error) {
+	_, leaderID := s.raft.LeaderWithID()
+	var term uint64
+	fmt.Sscan(s.raft.Stats()["term"], &term)
+	return &vaultv1.RaftStatusResponse{
+		Id: s.cfg.ID, State: s.raft.State().String(), LeaderId: string(leaderID),
+		Term: term, LastIndex: s.raft.LastIndex(),
+	}, nil
+}
+
+func (s *Server) StepDown(context.Context, *vaultv1.StepDownRequest) (*vaultv1.StepDownResponse, error) {
+	if err := s.leaderOnly(); err != nil {
+		return nil, err
+	}
+	if err := s.raft.LeadershipTransfer().Error(); err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	return &vaultv1.StepDownResponse{}, nil
+}

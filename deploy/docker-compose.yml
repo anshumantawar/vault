@@ -1,0 +1,38 @@
+# Scaled topology: 2 stateless gateways behind Caddy, 3 meta (Raft), 6 nodes in 3 zones.
+#   docker compose -f deploy/docker-compose.yml up --build
+#   S3 → http://localhost:9000 (load-balanced)   UI → http://localhost:8080 (gateway 1)
+x-meta: &meta
+  build: ..
+  restart: unless-stopped
+x-node: &node
+  build: ..
+  restart: unless-stopped
+x-gw: &gw
+  build: ..
+  restart: unless-stopped
+  environment:
+    VAULT_ACCESS_KEY: ${VAULT_ACCESS_KEY:-vaultadmin}
+    VAULT_SECRET_KEY: ${VAULT_SECRET_KEY:-vaultsecret}
+
+services:
+  m1: { <<: *meta, command: meta -id m1 -grpc 0.0.0.0:7001 -raft m1:7101 -dir /data -peers m1=m1:7101,m2=m2:7101,m3=m3:7101, volumes: [m1:/data] }
+  m2: { <<: *meta, command: meta -id m2 -grpc 0.0.0.0:7001 -raft m2:7101 -dir /data -peers m1=m1:7101,m2=m2:7101,m3=m3:7101, volumes: [m2:/data] }
+  m3: { <<: *meta, command: meta -id m3 -grpc 0.0.0.0:7001 -raft m3:7101 -dir /data -peers m1=m1:7101,m2=m2:7101,m3=m3:7101, volumes: [m3:/data] }
+
+  n1: { <<: *node, command: node -id n1 -addr n1:9101 -zone z1 -dir /data -meta m1:7001,m2:7001,m3:7001, volumes: [n1:/data] }
+  n2: { <<: *node, command: node -id n2 -addr n2:9101 -zone z2 -dir /data -meta m1:7001,m2:7001,m3:7001, volumes: [n2:/data] }
+  n3: { <<: *node, command: node -id n3 -addr n3:9101 -zone z3 -dir /data -meta m1:7001,m2:7001,m3:7001, volumes: [n3:/data] }
+  n4: { <<: *node, command: node -id n4 -addr n4:9101 -zone z1 -dir /data -meta m1:7001,m2:7001,m3:7001, volumes: [n4:/data] }
+  n5: { <<: *node, command: node -id n5 -addr n5:9101 -zone z2 -dir /data -meta m1:7001,m2:7001,m3:7001, volumes: [n5:/data] }
+  n6: { <<: *node, command: node -id n6 -addr n6:9101 -zone z3 -dir /data -meta m1:7001,m2:7001,m3:7001, volumes: [n6:/data] }
+
+  gw1: { <<: *gw, command: gateway -s3 0.0.0.0:9000 -ui 0.0.0.0:8080 -meta m1:7001,m2:7001,m3:7001, ports: ["127.0.0.1:8080:8080"] }
+  gw2: { <<: *gw, command: gateway -s3 0.0.0.0:9000 -ui "" -meta m1:7001,m2:7001,m3:7001 }
+
+  lb:
+    image: caddy:2
+    command: caddy reverse-proxy --from :9000 --to gw1:9000 --to gw2:9000
+    ports: ["127.0.0.1:9000:9000"]
+    depends_on: [gw1, gw2]
+
+volumes: { m1: {}, m2: {}, m3: {}, n1: {}, n2: {}, n3: {}, n4: {}, n5: {}, n6: {} }
