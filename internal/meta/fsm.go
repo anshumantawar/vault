@@ -27,12 +27,24 @@ type state struct {
 	Tombstones map[string]*Tombstone         `json:"tombstones"`
 	Uploads    map[string]*Upload            `json:"uploads"`
 	Nodes      map[string]*NodeInfo          `json:"nodes"`
+	// ponytail: secrets are stored as-is (SigV4 needs them); encrypt Raft
+	// snapshots and logs at rest before handling real customer keys.
+	Users map[string]*User `json:"users"` // access key → user
+}
+
+type User struct {
+	Secret    string `json:"secret"`
+	Name      string `json:"name"`
+	Admin     bool   `json:"admin,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+	AccessKey string `json:"access_key"`
 }
 
 type Bucket struct {
 	Replicas    uint32 `json:"replicas"`
 	WriteQuorum uint32 `json:"write_quorum"`
 	CreatedAt   int64  `json:"created_at"`
+	Owner       string `json:"owner,omitempty"` // access key; empty = admins only
 }
 
 type ChunkRef struct {
@@ -116,6 +128,7 @@ type command struct {
 	SHA      string            `json:"sha,omitempty"`
 	NodeID   string            `json:"node_id,omitempty"`
 	Node     *NodeInfo         `json:"node,omitempty"`
+	User     *User             `json:"user,omitempty"`
 }
 
 type completedPart struct {
@@ -139,7 +152,7 @@ func newState() *state {
 	return &state{
 		Buckets: map[string]*Bucket{}, Objects: map[string]map[string]*Object{},
 		Chunks: map[string]*ChunkInfo{}, Tombstones: map[string]*Tombstone{},
-		Uploads: map[string]*Upload{}, Nodes: map[string]*NodeInfo{},
+		Uploads: map[string]*Upload{}, Nodes: map[string]*NodeInfo{}, Users: map[string]*User{},
 	}
 }
 
@@ -283,6 +296,32 @@ func (st *state) apply(c *command) result {
 			return result{err: s3err(codes.NotFound, "NoSuchUpload")}
 		}
 		st.dropUpload(c.UploadID, c.Now)
+
+	case "create_user":
+		if _, ok := st.Users[c.User.AccessKey]; ok {
+			return result{err: s3err(codes.AlreadyExists, "UserAlreadyExists")}
+		}
+		u := *c.User
+		u.CreatedAt = c.Now
+		st.Users[u.AccessKey] = &u
+
+	case "delete_user":
+		u := st.Users[c.Key]
+		if u == nil {
+			return result{err: s3err(codes.NotFound, "NoSuchUser")}
+		}
+		if u.Admin {
+			admins := 0
+			for _, x := range st.Users {
+				if x.Admin {
+					admins++
+				}
+			}
+			if admins == 1 {
+				return result{err: s3err(codes.FailedPrecondition, "LastAdmin")}
+			}
+		}
+		delete(st.Users, c.Key)
 
 	case "upsert_node":
 		st.Nodes[c.NodeID] = c.Node
@@ -444,6 +483,9 @@ func (f *fsm) Restore(r io.ReadCloser) error {
 	st := newState()
 	if err := json.NewDecoder(r).Decode(st); err != nil {
 		return err
+	}
+	if st.Users == nil {
+		st.Users = map[string]*User{}
 	}
 	f.mu.Lock()
 	f.st = st

@@ -1,8 +1,11 @@
 package meta
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/raft"
 )
 
 func sha(c byte) string { return strings.Repeat(string(c), 64) }
@@ -107,5 +110,27 @@ func TestListObjectsDelimiter(t *testing.T) {
 	keys, prefixes, trunc = st.listObjects("b", "", "/", "img/\U0010FFFF", 3)
 	if strings.Join(keys, ",") != "z" || len(prefixes) != 0 || trunc {
 		t.Fatalf("page 2: keys=%v prefixes=%v truncated=%v", keys, prefixes, trunc)
+	}
+}
+
+// Users survive the Raft log round trip (JSON) and the last admin can't be deleted.
+func TestUsers(t *testing.T) {
+	st := newState()
+	f := &fsm{st: st}
+	apply := func(c *command) result {
+		b, _ := json.Marshal(c)
+		return f.Apply(&raft.Log{Data: b}).(result)
+	}
+	if r := apply(&command{Op: "create_user", User: &User{AccessKey: "VKADMIN01", Secret: "s", Name: "admin", Admin: true}}); r.err != nil {
+		t.Fatal(r.err)
+	}
+	if st.Users["VKADMIN01"] == nil {
+		t.Fatalf("user stored under the wrong key: %v", st.Users)
+	}
+	if r := apply(&command{Op: "create_user", User: &User{AccessKey: "VKADMIN01", Secret: "x", Name: "dup"}}); r.err == nil {
+		t.Error("duplicate access key accepted")
+	}
+	if r := apply(&command{Op: "delete_user", Key: "VKADMIN01"}); r.err == nil {
+		t.Error("deleted the last admin")
 	}
 }

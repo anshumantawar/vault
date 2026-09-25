@@ -175,3 +175,17 @@ func Bytes(n int64) string {
 }
 
 func urlq(s string) string { return url.QueryEscape(s) }
+
+// Session is who is signed in to the UI.
+type Session struct {
+	Name, AccessKey string
+	Admin           bool
+}
+
+type UserRow struct {
+	Name, AccessKey, Created string
+	Admin, You               bool
+}
+
+// NewUser is shown once, right after creation, with its secret.
+type NewUser struct{ Name, AccessKey, SecretKey string }

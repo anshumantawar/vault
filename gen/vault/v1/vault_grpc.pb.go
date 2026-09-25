@@ -301,6 +301,9 @@ const (
 	MetaService_ClusterStatus_FullMethodName  = "/vault.v1.MetaService/ClusterStatus"
 	MetaService_RaftStatus_FullMethodName     = "/vault.v1.MetaService/RaftStatus"
 	MetaService_StepDown_FullMethodName       = "/vault.v1.MetaService/StepDown"
+	MetaService_CreateUser_FullMethodName     = "/vault.v1.MetaService/CreateUser"
+	MetaService_DeleteUser_FullMethodName     = "/vault.v1.MetaService/DeleteUser"
+	MetaService_ListUsers_FullMethodName      = "/vault.v1.MetaService/ListUsers"
 )
 
 // MetaServiceClient is the client API for MetaService service.
@@ -329,6 +332,10 @@ type MetaServiceClient interface {
 	ClusterStatus(ctx context.Context, in *ClusterStatusRequest, opts ...grpc.CallOption) (*ClusterStatusResponse, error)
 	RaftStatus(ctx context.Context, in *RaftStatusRequest, opts ...grpc.CallOption) (*RaftStatusResponse, error)
 	StepDown(ctx context.Context, in *StepDownRequest, opts ...grpc.CallOption) (*StepDownResponse, error)
+	// Tenants. Secrets are returned to gateways only: they verify SigV4.
+	CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*CreateUserResponse, error)
+	DeleteUser(ctx context.Context, in *DeleteUserRequest, opts ...grpc.CallOption) (*DeleteUserResponse, error)
+	ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error)
 }
 
 type metaServiceClient struct {
@@ -529,6 +536,36 @@ func (c *metaServiceClient) StepDown(ctx context.Context, in *StepDownRequest, o
 	return out, nil
 }
 
+func (c *metaServiceClient) CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*CreateUserResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateUserResponse)
+	err := c.cc.Invoke(ctx, MetaService_CreateUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metaServiceClient) DeleteUser(ctx context.Context, in *DeleteUserRequest, opts ...grpc.CallOption) (*DeleteUserResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteUserResponse)
+	err := c.cc.Invoke(ctx, MetaService_DeleteUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *metaServiceClient) ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListUsersResponse)
+	err := c.cc.Invoke(ctx, MetaService_ListUsers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MetaServiceServer is the server API for MetaService service.
 // All implementations must embed UnimplementedMetaServiceServer
 // for forward compatibility.
@@ -555,6 +592,10 @@ type MetaServiceServer interface {
 	ClusterStatus(context.Context, *ClusterStatusRequest) (*ClusterStatusResponse, error)
 	RaftStatus(context.Context, *RaftStatusRequest) (*RaftStatusResponse, error)
 	StepDown(context.Context, *StepDownRequest) (*StepDownResponse, error)
+	// Tenants. Secrets are returned to gateways only: they verify SigV4.
+	CreateUser(context.Context, *CreateUserRequest) (*CreateUserResponse, error)
+	DeleteUser(context.Context, *DeleteUserRequest) (*DeleteUserResponse, error)
+	ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error)
 	mustEmbedUnimplementedMetaServiceServer()
 }
 
@@ -621,6 +662,15 @@ func (UnimplementedMetaServiceServer) RaftStatus(context.Context, *RaftStatusReq
 }
 func (UnimplementedMetaServiceServer) StepDown(context.Context, *StepDownRequest) (*StepDownResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StepDown not implemented")
+}
+func (UnimplementedMetaServiceServer) CreateUser(context.Context, *CreateUserRequest) (*CreateUserResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateUser not implemented")
+}
+func (UnimplementedMetaServiceServer) DeleteUser(context.Context, *DeleteUserRequest) (*DeleteUserResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteUser not implemented")
+}
+func (UnimplementedMetaServiceServer) ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListUsers not implemented")
 }
 func (UnimplementedMetaServiceServer) mustEmbedUnimplementedMetaServiceServer() {}
 func (UnimplementedMetaServiceServer) testEmbeddedByValue()                     {}
@@ -985,6 +1035,60 @@ func _MetaService_StepDown_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MetaService_CreateUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetaServiceServer).CreateUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetaService_CreateUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetaServiceServer).CreateUser(ctx, req.(*CreateUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetaService_DeleteUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetaServiceServer).DeleteUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetaService_DeleteUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetaServiceServer).DeleteUser(ctx, req.(*DeleteUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MetaService_ListUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListUsersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MetaServiceServer).ListUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MetaService_ListUsers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MetaServiceServer).ListUsers(ctx, req.(*ListUsersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MetaService_ServiceDesc is the grpc.ServiceDesc for MetaService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1067,6 +1171,18 @@ var MetaService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StepDown",
 			Handler:    _MetaService_StepDown_Handler,
+		},
+		{
+			MethodName: "CreateUser",
+			Handler:    _MetaService_CreateUser_Handler,
+		},
+		{
+			MethodName: "DeleteUser",
+			Handler:    _MetaService_DeleteUser_Handler,
+		},
+		{
+			MethodName: "ListUsers",
+			Handler:    _MetaService_ListUsers_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

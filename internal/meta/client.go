@@ -16,12 +16,12 @@ import (
 type Client struct {
 	addrs  []string
 	pool   *wire.Pool
-	from   string
 	leader atomic.Int32
 }
 
-func NewClient(addrs []string, pool *wire.Pool, from string) *Client {
-	return &Client{addrs: addrs, pool: pool, from: from}
+// NewClient calls the meta group over pool; the pool's certificate is the caller's identity.
+func NewClient(addrs []string, pool *wire.Pool) *Client {
+	return &Client{addrs: addrs, pool: pool}
 }
 
 // Call runs fn against the leader, retrying other members for up to ~6s
@@ -55,7 +55,7 @@ func (c *Client) try(ctx context.Context, addr string, fn func(context.Context, 
 	if err != nil {
 		return status.Error(codes.Unavailable, err.Error())
 	}
-	actx, cancel := context.WithTimeout(wire.WithFrom(ctx, c.from), 3*time.Second)
+	actx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	err = fn(actx, vaultv1.NewMetaServiceClient(conn))
 	if status.Code(err) == codes.DeadlineExceeded && ctx.Err() == nil {

@@ -22,37 +22,153 @@ import (
 // ponytail: bind the UI to localhost only; add auth before exposing it.
 func (g *Gateway) uiHandler() http.Handler {
 	mux := http.NewServeMux()
+	user, admin := g.signedIn, g.adminOnly
+	// public: sign-in only
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(ui.Static)))
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { ui.Desktop().Render(r.Context(), w) })
-	mux.HandleFunc("GET /app/pulse", g.appPulse)
-	mux.HandleFunc("GET /app/files", g.appFiles)
-	mux.HandleFunc("POST /app/files/bucket", g.appCreateBucket)
-	mux.HandleFunc("POST /app/files/dropbucket", g.appDropBucket)
-	mux.HandleFunc("POST /app/files/upload", g.appUpload)
-	mux.HandleFunc("POST /app/files/delete", g.appDelete)
-	mux.HandleFunc("GET /app/view", g.appView)
-	mux.HandleFunc("GET /app/stats", func(w http.ResponseWriter, r *http.Request) { ui.StatsApp().Render(r.Context(), w) })
-	mux.HandleFunc("GET /app/stats/data", g.appStatsData)
-	mux.HandleFunc("GET /app/connect", func(w http.ResponseWriter, r *http.Request) {
-		ui.ConnectApp(g.cfg.S3Addr, g.cfg.AccessKey).Render(r.Context(), w)
-	})
-	mux.HandleFunc("GET /app/present", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /login", g.loginPage)
+	mux.HandleFunc("POST /login", g.login)
+	mux.HandleFunc("POST /logout", g.logout)
+	// every signed-in user: their own buckets and keys
+	mux.HandleFunc("GET /{$}", user(func(w http.ResponseWriter, r *http.Request) {
+		ui.Desktop(sessionView(sessionUser(r.Context()))).Render(r.Context(), w)
+	}))
+	mux.HandleFunc("GET /app/files", user(g.appFiles))
+	mux.HandleFunc("POST /app/files/bucket", user(g.appCreateBucket))
+	mux.HandleFunc("POST /app/files/dropbucket", user(g.appDropBucket))
+	mux.HandleFunc("POST /app/files/upload", user(g.appUpload))
+	mux.HandleFunc("POST /app/files/delete", user(g.appDelete))
+	mux.HandleFunc("GET /app/view", user(g.appView))
+	mux.HandleFunc("GET /obj/{bucket}/{key...}", user(g.uiObject))
+	mux.HandleFunc("GET /app/connect", user(func(w http.ResponseWriter, r *http.Request) {
+		scheme := "https"
+		if g.cfg.PlainHTTP {
+			scheme = "http"
+		}
+		ui.ConnectApp(scheme+"://"+g.cfg.S3Addr, sessionUser(r.Context()).GetAccessKey(), !g.cfg.PlainHTTP).Render(r.Context(), w)
+	}))
+	// admins: cluster-wide views, users, and anything that injects failures
+	mux.HandleFunc("GET /app/pulse", admin(g.appPulse))
+	mux.HandleFunc("GET /app/stats", admin(func(w http.ResponseWriter, r *http.Request) { ui.StatsApp().Render(r.Context(), w) }))
+	mux.HandleFunc("GET /app/stats/data", admin(g.appStatsData))
+	mux.HandleFunc("GET /app/users", admin(g.appUsers))
+	mux.HandleFunc("POST /app/users", admin(g.appCreateUser))
+	mux.HandleFunc("POST /app/users/delete", admin(g.appDeleteUser))
+	mux.HandleFunc("GET /app/present", admin(func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
 		ui.PresentApp(ui.DeckAt(n)).Render(r.Context(), w)
+	}))
+	mux.HandleFunc("GET /app/present/live", admin(g.presentLive))
+	mux.HandleFunc("POST /ui/demo/heal", admin(g.demoHeal))
+	mux.HandleFunc("POST /ui/demo/readall", admin(g.demoReadAll))
+	mux.HandleFunc("POST /ui/demo/sample", admin(g.demoSample))
+	mux.HandleFunc("POST /ui/demo/crash", admin(g.demoCrash))
+	mux.HandleFunc("POST /ui/demo/corrupt", admin(g.demoCorrupt))
+	mux.HandleFunc("POST /ui/demo/partition", admin(g.demoPartition))
+	mux.HandleFunc("POST /ui/nodes/{id}/{action}", admin(g.uiFault))
+	mux.HandleFunc("POST /ui/meta/stepdown", admin(g.uiStepDown))
+	// Blocks cross-site form posts (CSRF); the session cookie is also SameSite=Strict.
+	return http.NewCrossOriginProtection().Handler(securityHeaders(mux))
+}
+
+func securityHeaders(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		if r.TLS != nil {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		h.ServeHTTP(w, r)
 	})
-	mux.HandleFunc("GET /app/present/live", g.presentLive)
-	mux.HandleFunc("POST /ui/demo/heal", g.demoHeal)
-	mux.HandleFunc("POST /ui/demo/readall", g.demoReadAll)
-	mux.HandleFunc("POST /ui/demo/sample", g.demoSample)
-	mux.HandleFunc("POST /ui/demo/crash", g.demoCrash)
-	mux.HandleFunc("POST /ui/demo/corrupt", g.demoCorrupt)
-	mux.HandleFunc("POST /ui/demo/partition", g.demoPartition)
-	mux.HandleFunc("GET /ui/leader", g.uiLeader)
-	mux.HandleFunc("POST /ui/nodes/{id}/{action}", g.uiFault)
-	mux.HandleFunc("POST /ui/meta/stepdown", g.uiStepDown)
-	mux.HandleFunc("GET /obj/{bucket}/{key...}", g.uiObject)
-	// Blocks cross-site form posts (CSRF) against the unauthenticated UI.
-	return http.NewCrossOriginProtection().Handler(mux)
+}
+
+func sessionView(u *vaultv1.User) ui.Session {
+	return ui.Session{Name: u.GetName(), AccessKey: u.GetAccessKey(), Admin: u.GetAdmin()}
+}
+
+// ---- sign in / out ----
+
+func (g *Gateway) loginPage(w http.ResponseWriter, r *http.Request) {
+	if _, err := g.sessionFrom(r); err == nil {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	ui.Login("").Render(r.Context(), w)
+}
+
+func (g *Gateway) login(w http.ResponseWriter, r *http.Request) {
+	u := g.checkLogin(r.Context(), strings.TrimSpace(r.FormValue("access_key")), r.FormValue("secret_key"))
+	if u == nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		ui.Login("Those keys don't match a Vault user.").Render(r.Context(), w)
+		return
+	}
+	g.setSession(w, r, u.GetAccessKey())
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (g *Gateway) logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// ---- Users app (admins) ----
+
+func (g *Gateway) usersView(w http.ResponseWriter, r *http.Request, created *vaultv1.User, msg string) {
+	var list []ui.UserRow
+	if m := g.users.byKey.Load(); m != nil {
+		for _, u := range *m {
+			list = append(list, ui.UserRow{Name: u.GetName(), AccessKey: u.GetAccessKey(), Admin: u.GetAdmin(), Created: time.Unix(0, u.GetCreatedAt()).Format("Jan 2 15:04"), You: u.GetAccessKey() == sessionUser(r.Context()).GetAccessKey()})
+		}
+	}
+	slices.SortFunc(list, func(a, b ui.UserRow) int { return strings.Compare(a.Name+a.AccessKey, b.Name+b.AccessKey) })
+	var nu *ui.NewUser
+	if created != nil {
+		nu = &ui.NewUser{Name: created.GetName(), AccessKey: created.GetAccessKey(), SecretKey: created.GetSecretKey()}
+	}
+	ui.UsersApp(list, nu, msg).Render(r.Context(), w)
+}
+
+func (g *Gateway) appUsers(w http.ResponseWriter, r *http.Request) {
+	g.refreshUsers(r.Context())
+	g.usersView(w, r, nil, "")
+}
+
+func (g *Gateway) appCreateUser(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" || len(name) > 64 {
+		g.usersView(w, r, nil, "Give the user a name (up to 64 characters).")
+		return
+	}
+	u := &vaultv1.User{AccessKey: newKey("VK", 18), SecretKey: newSecret(), Name: name, Admin: r.FormValue("admin") == "on"}
+	err := g.meta.Call(r.Context(), func(ctx context.Context, c vaultv1.MetaServiceClient) error {
+		_, err := c.CreateUser(ctx, &vaultv1.CreateUserRequest{User: u})
+		return err
+	})
+	if err != nil {
+		g.usersView(w, r, nil, "Could not create the user: "+err.Error())
+		return
+	}
+	g.refreshUsers(r.Context())
+	g.hist.log("info", "%s created user %s", sessionUser(r.Context()).GetName(), name)
+	g.usersView(w, r, u, "")
+}
+
+func (g *Gateway) appDeleteUser(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("key")
+	if key == sessionUser(r.Context()).GetAccessKey() {
+		g.usersView(w, r, nil, "You can't delete the user you're signed in as.")
+		return
+	}
+	err := g.meta.Call(r.Context(), func(ctx context.Context, c vaultv1.MetaServiceClient) error {
+		_, err := c.DeleteUser(ctx, &vaultv1.DeleteUserRequest{AccessKey: key})
+		return err
+	})
+	msg := ""
+	if err != nil {
+		msg = "Could not delete: " + err.Error()
+	}
+	g.refreshUsers(r.Context())
+	g.usersView(w, r, nil, msg)
 }
 
 func errMsg(err error) string {
@@ -79,11 +195,13 @@ func (g *Gateway) filesView(ctx context.Context, bucket, prefix string) ui.Files
 		})
 		f.Err = errMsg(err)
 		for _, b := range resp.GetBuckets() {
-			f.Buckets = append(f.Buckets, ui.Bucket{Name: b.GetName(), Policy: policyLabel(b)})
+			if canUse(sessionUser(ctx), b) {
+				f.Buckets = append(f.Buckets, ui.Bucket{Name: b.GetName(), Policy: policyLabel(b)})
+			}
 		}
 		return f
 	}
-	b, err := g.getBucket(ctx, bucket)
+	b, err := g.authorize(ctx, sessionUser(ctx), bucket)
 	if err != nil {
 		f.Err = err.Error()
 		return f
@@ -133,6 +251,10 @@ func (g *Gateway) appCreateBucket(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) appDropBucket(w http.ResponseWriter, r *http.Request) {
 	b := r.URL.Query().Get("bucket")
+	if _, err := g.authorize(r.Context(), sessionUser(r.Context()), b); err != nil {
+		g.renderFiles(w, r, b, "", err)
+		return
+	}
 	if err := g.deleteBucket(r.Context(), b); err != nil {
 		g.renderFiles(w, r, b, "", err)
 		return
@@ -145,6 +267,10 @@ func (g *Gateway) appDropBucket(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) appUpload(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	bucket, prefix := q.Get("bucket"), q.Get("prefix")
+	if _, err := g.authorize(r.Context(), sessionUser(r.Context()), bucket); err != nil {
+		g.renderFiles(w, r, bucket, prefix, err)
+		return
+	}
 	mr, err := r.MultipartReader()
 	if err != nil {
 		g.renderFiles(w, r, bucket, prefix, err)
@@ -179,6 +305,10 @@ func (g *Gateway) appUpload(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) appDelete(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if _, err := g.authorize(r.Context(), sessionUser(r.Context()), q.Get("bucket")); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	if err := g.deleteObject(r.Context(), q.Get("bucket"), q.Get("key")); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -188,6 +318,10 @@ func (g *Gateway) appDelete(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) appView(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if _, err := g.authorize(r.Context(), sessionUser(r.Context()), q.Get("bucket")); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	o, err := g.getObject(r.Context(), q.Get("bucket"), q.Get("key"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -526,19 +660,12 @@ func (g *Gateway) demoReadAll(w http.ResponseWriter, r *http.Request) {
 	say(w, "Opened all %d files (%s) in %s. Every piece matched its fingerprint ✓", objects, ui.Bytes(bytes), time.Since(start).Round(time.Millisecond))
 }
 
-// uiLeader prints the Raft leader's id, for `scripts/demo.sh kill $(curl …/ui/leader)`.
-func (g *Gateway) uiLeader(w http.ResponseWriter, r *http.Request) {
-	for _, rv := range g.raftViews(r.Context()) {
-		if rv.State == "Leader" {
-			fmt.Fprint(w, rv.ID)
-			return
-		}
-	}
-	http.Error(w, "no leader", http.StatusServiceUnavailable)
-}
-
 // uiObject serves an object's bytes to the browser (previews, thumbnails, downloads).
 func (g *Gateway) uiObject(w http.ResponseWriter, r *http.Request) {
+	if _, err := g.authorize(r.Context(), sessionUser(r.Context()), r.PathValue("bucket")); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	o, err := g.getObject(r.Context(), r.PathValue("bucket"), r.PathValue("key"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)

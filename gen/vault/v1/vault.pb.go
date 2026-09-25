@@ -881,11 +881,14 @@ func (x *ListNodesResponse) GetNodes() []*Node {
 }
 
 type Bucket struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Replicas      uint32                 `protobuf:"varint,2,opt,name=replicas,proto3" json:"replicas,omitempty"`
-	WriteQuorum   uint32                 `protobuf:"varint,3,opt,name=write_quorum,json=writeQuorum,proto3" json:"write_quorum,omitempty"`
-	CreatedAt     int64                  `protobuf:"varint,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Replicas    uint32                 `protobuf:"varint,2,opt,name=replicas,proto3" json:"replicas,omitempty"`
+	WriteQuorum uint32                 `protobuf:"varint,3,opt,name=write_quorum,json=writeQuorum,proto3" json:"write_quorum,omitempty"`
+	CreatedAt   int64                  `protobuf:"varint,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Access key of the owning user. Empty for buckets created before tenancy:
+	// only admins may use those.
+	Owner         string `protobuf:"bytes,5,opt,name=owner,proto3" json:"owner,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -946,6 +949,13 @@ func (x *Bucket) GetCreatedAt() int64 {
 		return x.CreatedAt
 	}
 	return 0
+}
+
+func (x *Bucket) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
 }
 
 type CreateBucketRequest struct {
@@ -2584,12 +2594,6 @@ type ClusterStatusResponse struct {
 	LastMttrMs      int64                  `protobuf:"varint,11,opt,name=last_mttr_ms,json=lastMttrMs,proto3" json:"last_mttr_ms,omitempty"`
 	// Unix nanos since redundancy was last incomplete; 0 when fully healthy.
 	DegradedSince int64 `protobuf:"varint,12,opt,name=degraded_since,json=degradedSince,proto3" json:"degraded_since,omitempty"`
-	// Copies-vs-target histogram over live chunks (lost is field 8).
-	MissingOne     int64 `protobuf:"varint,13,opt,name=missing_one,json=missingOne,proto3" json:"missing_one,omitempty"`
-	MissingMany    int64 `protobuf:"varint,14,opt,name=missing_many,json=missingMany,proto3" json:"missing_many,omitempty"`
-	OverReplicated int64 `protobuf:"varint,15,opt,name=over_replicated,json=overReplicated,proto3" json:"over_replicated,omitempty"`
-	// Bad copies reported and dropped since this member became leader.
-	Corruptions   int64 `protobuf:"varint,16,opt,name=corruptions,proto3" json:"corruptions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2704,34 +2708,6 @@ func (x *ClusterStatusResponse) GetLastMttrMs() int64 {
 func (x *ClusterStatusResponse) GetDegradedSince() int64 {
 	if x != nil {
 		return x.DegradedSince
-	}
-	return 0
-}
-
-func (x *ClusterStatusResponse) GetMissingOne() int64 {
-	if x != nil {
-		return x.MissingOne
-	}
-	return 0
-}
-
-func (x *ClusterStatusResponse) GetMissingMany() int64 {
-	if x != nil {
-		return x.MissingMany
-	}
-	return 0
-}
-
-func (x *ClusterStatusResponse) GetOverReplicated() int64 {
-	if x != nil {
-		return x.OverReplicated
-	}
-	return 0
-}
-
-func (x *ClusterStatusResponse) GetCorruptions() int64 {
-	if x != nil {
-		return x.Corruptions
 	}
 	return 0
 }
@@ -2920,6 +2896,322 @@ func (*StepDownResponse) Descriptor() ([]byte, []int) {
 	return file_vault_v1_vault_proto_rawDescGZIP(), []int{53}
 }
 
+type User struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccessKey     string                 `protobuf:"bytes,1,opt,name=access_key,json=accessKey,proto3" json:"access_key,omitempty"`
+	SecretKey     string                 `protobuf:"bytes,2,opt,name=secret_key,json=secretKey,proto3" json:"secret_key,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Admin         bool                   `protobuf:"varint,4,opt,name=admin,proto3" json:"admin,omitempty"`
+	CreatedAt     int64                  `protobuf:"varint,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *User) Reset() {
+	*x = User{}
+	mi := &file_vault_v1_vault_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *User) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*User) ProtoMessage() {}
+
+func (x *User) ProtoReflect() protoreflect.Message {
+	mi := &file_vault_v1_vault_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use User.ProtoReflect.Descriptor instead.
+func (*User) Descriptor() ([]byte, []int) {
+	return file_vault_v1_vault_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *User) GetAccessKey() string {
+	if x != nil {
+		return x.AccessKey
+	}
+	return ""
+}
+
+func (x *User) GetSecretKey() string {
+	if x != nil {
+		return x.SecretKey
+	}
+	return ""
+}
+
+func (x *User) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *User) GetAdmin() bool {
+	if x != nil {
+		return x.Admin
+	}
+	return false
+}
+
+func (x *User) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+type CreateUserRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	User          *User                  `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateUserRequest) Reset() {
+	*x = CreateUserRequest{}
+	mi := &file_vault_v1_vault_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateUserRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateUserRequest) ProtoMessage() {}
+
+func (x *CreateUserRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vault_v1_vault_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateUserRequest.ProtoReflect.Descriptor instead.
+func (*CreateUserRequest) Descriptor() ([]byte, []int) {
+	return file_vault_v1_vault_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *CreateUserRequest) GetUser() *User {
+	if x != nil {
+		return x.User
+	}
+	return nil
+}
+
+type CreateUserResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateUserResponse) Reset() {
+	*x = CreateUserResponse{}
+	mi := &file_vault_v1_vault_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateUserResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateUserResponse) ProtoMessage() {}
+
+func (x *CreateUserResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vault_v1_vault_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateUserResponse.ProtoReflect.Descriptor instead.
+func (*CreateUserResponse) Descriptor() ([]byte, []int) {
+	return file_vault_v1_vault_proto_rawDescGZIP(), []int{56}
+}
+
+type DeleteUserRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AccessKey     string                 `protobuf:"bytes,1,opt,name=access_key,json=accessKey,proto3" json:"access_key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteUserRequest) Reset() {
+	*x = DeleteUserRequest{}
+	mi := &file_vault_v1_vault_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteUserRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteUserRequest) ProtoMessage() {}
+
+func (x *DeleteUserRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vault_v1_vault_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteUserRequest.ProtoReflect.Descriptor instead.
+func (*DeleteUserRequest) Descriptor() ([]byte, []int) {
+	return file_vault_v1_vault_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *DeleteUserRequest) GetAccessKey() string {
+	if x != nil {
+		return x.AccessKey
+	}
+	return ""
+}
+
+type DeleteUserResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteUserResponse) Reset() {
+	*x = DeleteUserResponse{}
+	mi := &file_vault_v1_vault_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteUserResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteUserResponse) ProtoMessage() {}
+
+func (x *DeleteUserResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vault_v1_vault_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteUserResponse.ProtoReflect.Descriptor instead.
+func (*DeleteUserResponse) Descriptor() ([]byte, []int) {
+	return file_vault_v1_vault_proto_rawDescGZIP(), []int{58}
+}
+
+type ListUsersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUsersRequest) Reset() {
+	*x = ListUsersRequest{}
+	mi := &file_vault_v1_vault_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUsersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUsersRequest) ProtoMessage() {}
+
+func (x *ListUsersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_vault_v1_vault_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUsersRequest.ProtoReflect.Descriptor instead.
+func (*ListUsersRequest) Descriptor() ([]byte, []int) {
+	return file_vault_v1_vault_proto_rawDescGZIP(), []int{59}
+}
+
+type ListUsersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Users         []*User                `protobuf:"bytes,1,rep,name=users,proto3" json:"users,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUsersResponse) Reset() {
+	*x = ListUsersResponse{}
+	mi := &file_vault_v1_vault_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUsersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUsersResponse) ProtoMessage() {}
+
+func (x *ListUsersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_vault_v1_vault_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUsersResponse.ProtoReflect.Descriptor instead.
+func (*ListUsersResponse) Descriptor() ([]byte, []int) {
+	return file_vault_v1_vault_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *ListUsersResponse) GetUsers() []*User {
+	if x != nil {
+		return x.Users
+	}
+	return nil
+}
+
 var File_vault_v1_vault_proto protoreflect.FileDescriptor
 
 const file_vault_v1_vault_proto_rawDesc = "" +
@@ -2976,13 +3268,14 @@ const file_vault_v1_vault_proto_rawDesc = "" +
 	"\x15ReportCorruptResponse\"\x12\n" +
 	"\x10ListNodesRequest\"9\n" +
 	"\x11ListNodesResponse\x12$\n" +
-	"\x05nodes\x18\x01 \x03(\v2\x0e.vault.v1.NodeR\x05nodes\"z\n" +
+	"\x05nodes\x18\x01 \x03(\v2\x0e.vault.v1.NodeR\x05nodes\"\x90\x01\n" +
 	"\x06Bucket\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\breplicas\x18\x02 \x01(\rR\breplicas\x12!\n" +
 	"\fwrite_quorum\x18\x03 \x01(\rR\vwriteQuorum\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\x04 \x01(\x03R\tcreatedAt\"?\n" +
+	"created_at\x18\x04 \x01(\x03R\tcreatedAt\x12\x14\n" +
+	"\x05owner\x18\x05 \x01(\tR\x05owner\"?\n" +
 	"\x13CreateBucketRequest\x12(\n" +
 	"\x06bucket\x18\x01 \x01(\v2\x10.vault.v1.BucketR\x06bucket\"\x16\n" +
 	"\x14CreateBucketResponse\")\n" +
@@ -3092,7 +3385,7 @@ const file_vault_v1_vault_proto_rawDesc = "" +
 	"\vChunkStatus\x12\x16\n" +
 	"\x06sha256\x18\x01 \x01(\tR\x06sha256\x12\x12\n" +
 	"\x04want\x18\x02 \x01(\rR\x04want\x12\x18\n" +
-	"\aholders\x18\x03 \x03(\tR\aholders\"\xbc\x04\n" +
+	"\aholders\x18\x03 \x03(\tR\aholders\"\xad\x03\n" +
 	"\x15ClusterStatusResponse\x12$\n" +
 	"\x05nodes\x18\x01 \x03(\v2\x0e.vault.v1.NodeR\x05nodes\x12-\n" +
 	"\x06chunks\x18\x02 \x03(\v2\x15.vault.v1.ChunkStatusR\x06chunks\x12\x18\n" +
@@ -3109,12 +3402,7 @@ const file_vault_v1_vault_proto_rawDesc = "" +
 	"rebalances\x12 \n" +
 	"\flast_mttr_ms\x18\v \x01(\x03R\n" +
 	"lastMttrMs\x12%\n" +
-	"\x0edegraded_since\x18\f \x01(\x03R\rdegradedSince\x12\x1f\n" +
-	"\vmissing_one\x18\r \x01(\x03R\n" +
-	"missingOne\x12!\n" +
-	"\fmissing_many\x18\x0e \x01(\x03R\vmissingMany\x12'\n" +
-	"\x0fover_replicated\x18\x0f \x01(\x03R\x0eoverReplicated\x12 \n" +
-	"\vcorruptions\x18\x10 \x01(\x03R\vcorruptions\"\x13\n" +
+	"\x0edegraded_since\x18\f \x01(\x03R\rdegradedSince\"\x13\n" +
 	"\x11RaftStatusRequest\"\x8a\x01\n" +
 	"\x12RaftStatusResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
@@ -3124,13 +3412,32 @@ const file_vault_v1_vault_proto_rawDesc = "" +
 	"\n" +
 	"last_index\x18\x05 \x01(\x04R\tlastIndex\"\x11\n" +
 	"\x0fStepDownRequest\"\x12\n" +
-	"\x10StepDownResponse2\xec\x02\n" +
+	"\x10StepDownResponse\"\x8d\x01\n" +
+	"\x04User\x12\x1d\n" +
+	"\n" +
+	"access_key\x18\x01 \x01(\tR\taccessKey\x12\x1d\n" +
+	"\n" +
+	"secret_key\x18\x02 \x01(\tR\tsecretKey\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x14\n" +
+	"\x05admin\x18\x04 \x01(\bR\x05admin\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\x03R\tcreatedAt\"7\n" +
+	"\x11CreateUserRequest\x12\"\n" +
+	"\x04user\x18\x01 \x01(\v2\x0e.vault.v1.UserR\x04user\"\x14\n" +
+	"\x12CreateUserResponse\"2\n" +
+	"\x11DeleteUserRequest\x12\x1d\n" +
+	"\n" +
+	"access_key\x18\x01 \x01(\tR\taccessKey\"\x14\n" +
+	"\x12DeleteUserResponse\"\x12\n" +
+	"\x10ListUsersRequest\"9\n" +
+	"\x11ListUsersResponse\x12$\n" +
+	"\x05users\x18\x01 \x03(\v2\x0e.vault.v1.UserR\x05users2\xec\x02\n" +
 	"\vNodeService\x12C\n" +
 	"\bPutChunk\x12\x19.vault.v1.PutChunkRequest\x1a\x1a.vault.v1.PutChunkResponse(\x01\x12C\n" +
 	"\bGetChunk\x12\x19.vault.v1.GetChunkRequest\x1a\x1a.vault.v1.GetChunkResponse0\x01\x12J\n" +
 	"\vDeleteChunk\x12\x1c.vault.v1.DeleteChunkRequest\x1a\x1d.vault.v1.DeleteChunkResponse\x12D\n" +
 	"\tPushChunk\x12\x1a.vault.v1.PushChunkRequest\x1a\x1b.vault.v1.PushChunkResponse\x12A\n" +
-	"\bSetFault\x12\x19.vault.v1.SetFaultRequest\x1a\x1a.vault.v1.SetFaultResponse2\xab\v\n" +
+	"\bSetFault\x12\x19.vault.v1.SetFaultRequest\x1a\x1a.vault.v1.SetFaultResponse2\x83\r\n" +
 	"\vMetaService\x12D\n" +
 	"\tHeartbeat\x12\x1a.vault.v1.HeartbeatRequest\x1a\x1b.vault.v1.HeartbeatResponse\x12P\n" +
 	"\rReportCorrupt\x12\x1e.vault.v1.ReportCorruptRequest\x1a\x1f.vault.v1.ReportCorruptResponse\x12D\n" +
@@ -3153,7 +3460,12 @@ const file_vault_v1_vault_proto_rawDesc = "" +
 	"\rClusterStatus\x12\x1e.vault.v1.ClusterStatusRequest\x1a\x1f.vault.v1.ClusterStatusResponse\x12G\n" +
 	"\n" +
 	"RaftStatus\x12\x1b.vault.v1.RaftStatusRequest\x1a\x1c.vault.v1.RaftStatusResponse\x12A\n" +
-	"\bStepDown\x12\x19.vault.v1.StepDownRequest\x1a\x1a.vault.v1.StepDownResponseB\x1cZ\x1avault/gen/vault/v1;vaultv1b\x06proto3"
+	"\bStepDown\x12\x19.vault.v1.StepDownRequest\x1a\x1a.vault.v1.StepDownResponse\x12G\n" +
+	"\n" +
+	"CreateUser\x12\x1b.vault.v1.CreateUserRequest\x1a\x1c.vault.v1.CreateUserResponse\x12G\n" +
+	"\n" +
+	"DeleteUser\x12\x1b.vault.v1.DeleteUserRequest\x1a\x1c.vault.v1.DeleteUserResponse\x12D\n" +
+	"\tListUsers\x12\x1a.vault.v1.ListUsersRequest\x1a\x1b.vault.v1.ListUsersResponseB\x1cZ\x1avault/gen/vault/v1;vaultv1b\x06proto3"
 
 var (
 	file_vault_v1_vault_proto_rawDescOnce sync.Once
@@ -3167,7 +3479,7 @@ func file_vault_v1_vault_proto_rawDescGZIP() []byte {
 	return file_vault_v1_vault_proto_rawDescData
 }
 
-var file_vault_v1_vault_proto_msgTypes = make([]protoimpl.MessageInfo, 57)
+var file_vault_v1_vault_proto_msgTypes = make([]protoimpl.MessageInfo, 64)
 var file_vault_v1_vault_proto_goTypes = []any{
 	(*PutChunkRequest)(nil),        // 0: vault.v1.PutChunkRequest
 	(*PutChunkResponse)(nil),       // 1: vault.v1.PutChunkResponse
@@ -3223,9 +3535,16 @@ var file_vault_v1_vault_proto_goTypes = []any{
 	(*RaftStatusResponse)(nil),     // 51: vault.v1.RaftStatusResponse
 	(*StepDownRequest)(nil),        // 52: vault.v1.StepDownRequest
 	(*StepDownResponse)(nil),       // 53: vault.v1.StepDownResponse
-	nil,                            // 54: vault.v1.Object.UserMetaEntry
-	nil,                            // 55: vault.v1.CopyObjectRequest.UserMetaEntry
-	nil,                            // 56: vault.v1.CreateUploadRequest.UserMetaEntry
+	(*User)(nil),                   // 54: vault.v1.User
+	(*CreateUserRequest)(nil),      // 55: vault.v1.CreateUserRequest
+	(*CreateUserResponse)(nil),     // 56: vault.v1.CreateUserResponse
+	(*DeleteUserRequest)(nil),      // 57: vault.v1.DeleteUserRequest
+	(*DeleteUserResponse)(nil),     // 58: vault.v1.DeleteUserResponse
+	(*ListUsersRequest)(nil),       // 59: vault.v1.ListUsersRequest
+	(*ListUsersResponse)(nil),      // 60: vault.v1.ListUsersResponse
+	nil,                            // 61: vault.v1.Object.UserMetaEntry
+	nil,                            // 62: vault.v1.CopyObjectRequest.UserMetaEntry
+	nil,                            // 63: vault.v1.CreateUploadRequest.UserMetaEntry
 }
 var file_vault_v1_vault_proto_depIdxs = []int32{
 	10, // 0: vault.v1.HeartbeatRequest.node:type_name -> vault.v1.Node
@@ -3233,72 +3552,80 @@ var file_vault_v1_vault_proto_depIdxs = []int32{
 	17, // 2: vault.v1.CreateBucketRequest.bucket:type_name -> vault.v1.Bucket
 	17, // 3: vault.v1.GetBucketResponse.bucket:type_name -> vault.v1.Bucket
 	17, // 4: vault.v1.ListBucketsResponse.buckets:type_name -> vault.v1.Bucket
-	54, // 5: vault.v1.Object.user_meta:type_name -> vault.v1.Object.UserMetaEntry
+	61, // 5: vault.v1.Object.user_meta:type_name -> vault.v1.Object.UserMetaEntry
 	26, // 6: vault.v1.Object.chunks:type_name -> vault.v1.Chunk
 	27, // 7: vault.v1.CommitObjectRequest.object:type_name -> vault.v1.Object
 	27, // 8: vault.v1.GetObjectResponse.object:type_name -> vault.v1.Object
-	55, // 9: vault.v1.CopyObjectRequest.user_meta:type_name -> vault.v1.CopyObjectRequest.UserMetaEntry
+	62, // 9: vault.v1.CopyObjectRequest.user_meta:type_name -> vault.v1.CopyObjectRequest.UserMetaEntry
 	27, // 10: vault.v1.CopyObjectResponse.object:type_name -> vault.v1.Object
 	27, // 11: vault.v1.ListObjectsResponse.objects:type_name -> vault.v1.Object
-	56, // 12: vault.v1.CreateUploadRequest.user_meta:type_name -> vault.v1.CreateUploadRequest.UserMetaEntry
+	63, // 12: vault.v1.CreateUploadRequest.user_meta:type_name -> vault.v1.CreateUploadRequest.UserMetaEntry
 	26, // 13: vault.v1.CommitPartRequest.chunks:type_name -> vault.v1.Chunk
 	42, // 14: vault.v1.CompleteUploadRequest.parts:type_name -> vault.v1.CompletedPart
 	27, // 15: vault.v1.CompleteUploadResponse.object:type_name -> vault.v1.Object
 	10, // 16: vault.v1.ClusterStatusResponse.nodes:type_name -> vault.v1.Node
 	48, // 17: vault.v1.ClusterStatusResponse.chunks:type_name -> vault.v1.ChunkStatus
-	0,  // 18: vault.v1.NodeService.PutChunk:input_type -> vault.v1.PutChunkRequest
-	2,  // 19: vault.v1.NodeService.GetChunk:input_type -> vault.v1.GetChunkRequest
-	4,  // 20: vault.v1.NodeService.DeleteChunk:input_type -> vault.v1.DeleteChunkRequest
-	6,  // 21: vault.v1.NodeService.PushChunk:input_type -> vault.v1.PushChunkRequest
-	8,  // 22: vault.v1.NodeService.SetFault:input_type -> vault.v1.SetFaultRequest
-	11, // 23: vault.v1.MetaService.Heartbeat:input_type -> vault.v1.HeartbeatRequest
-	13, // 24: vault.v1.MetaService.ReportCorrupt:input_type -> vault.v1.ReportCorruptRequest
-	15, // 25: vault.v1.MetaService.ListNodes:input_type -> vault.v1.ListNodesRequest
-	18, // 26: vault.v1.MetaService.CreateBucket:input_type -> vault.v1.CreateBucketRequest
-	20, // 27: vault.v1.MetaService.DeleteBucket:input_type -> vault.v1.DeleteBucketRequest
-	22, // 28: vault.v1.MetaService.GetBucket:input_type -> vault.v1.GetBucketRequest
-	24, // 29: vault.v1.MetaService.ListBuckets:input_type -> vault.v1.ListBucketsRequest
-	28, // 30: vault.v1.MetaService.CommitObject:input_type -> vault.v1.CommitObjectRequest
-	30, // 31: vault.v1.MetaService.GetObject:input_type -> vault.v1.GetObjectRequest
-	32, // 32: vault.v1.MetaService.DeleteObject:input_type -> vault.v1.DeleteObjectRequest
-	34, // 33: vault.v1.MetaService.CopyObject:input_type -> vault.v1.CopyObjectRequest
-	36, // 34: vault.v1.MetaService.ListObjects:input_type -> vault.v1.ListObjectsRequest
-	38, // 35: vault.v1.MetaService.CreateUpload:input_type -> vault.v1.CreateUploadRequest
-	40, // 36: vault.v1.MetaService.CommitPart:input_type -> vault.v1.CommitPartRequest
-	43, // 37: vault.v1.MetaService.CompleteUpload:input_type -> vault.v1.CompleteUploadRequest
-	45, // 38: vault.v1.MetaService.AbortUpload:input_type -> vault.v1.AbortUploadRequest
-	47, // 39: vault.v1.MetaService.ClusterStatus:input_type -> vault.v1.ClusterStatusRequest
-	50, // 40: vault.v1.MetaService.RaftStatus:input_type -> vault.v1.RaftStatusRequest
-	52, // 41: vault.v1.MetaService.StepDown:input_type -> vault.v1.StepDownRequest
-	1,  // 42: vault.v1.NodeService.PutChunk:output_type -> vault.v1.PutChunkResponse
-	3,  // 43: vault.v1.NodeService.GetChunk:output_type -> vault.v1.GetChunkResponse
-	5,  // 44: vault.v1.NodeService.DeleteChunk:output_type -> vault.v1.DeleteChunkResponse
-	7,  // 45: vault.v1.NodeService.PushChunk:output_type -> vault.v1.PushChunkResponse
-	9,  // 46: vault.v1.NodeService.SetFault:output_type -> vault.v1.SetFaultResponse
-	12, // 47: vault.v1.MetaService.Heartbeat:output_type -> vault.v1.HeartbeatResponse
-	14, // 48: vault.v1.MetaService.ReportCorrupt:output_type -> vault.v1.ReportCorruptResponse
-	16, // 49: vault.v1.MetaService.ListNodes:output_type -> vault.v1.ListNodesResponse
-	19, // 50: vault.v1.MetaService.CreateBucket:output_type -> vault.v1.CreateBucketResponse
-	21, // 51: vault.v1.MetaService.DeleteBucket:output_type -> vault.v1.DeleteBucketResponse
-	23, // 52: vault.v1.MetaService.GetBucket:output_type -> vault.v1.GetBucketResponse
-	25, // 53: vault.v1.MetaService.ListBuckets:output_type -> vault.v1.ListBucketsResponse
-	29, // 54: vault.v1.MetaService.CommitObject:output_type -> vault.v1.CommitObjectResponse
-	31, // 55: vault.v1.MetaService.GetObject:output_type -> vault.v1.GetObjectResponse
-	33, // 56: vault.v1.MetaService.DeleteObject:output_type -> vault.v1.DeleteObjectResponse
-	35, // 57: vault.v1.MetaService.CopyObject:output_type -> vault.v1.CopyObjectResponse
-	37, // 58: vault.v1.MetaService.ListObjects:output_type -> vault.v1.ListObjectsResponse
-	39, // 59: vault.v1.MetaService.CreateUpload:output_type -> vault.v1.CreateUploadResponse
-	41, // 60: vault.v1.MetaService.CommitPart:output_type -> vault.v1.CommitPartResponse
-	44, // 61: vault.v1.MetaService.CompleteUpload:output_type -> vault.v1.CompleteUploadResponse
-	46, // 62: vault.v1.MetaService.AbortUpload:output_type -> vault.v1.AbortUploadResponse
-	49, // 63: vault.v1.MetaService.ClusterStatus:output_type -> vault.v1.ClusterStatusResponse
-	51, // 64: vault.v1.MetaService.RaftStatus:output_type -> vault.v1.RaftStatusResponse
-	53, // 65: vault.v1.MetaService.StepDown:output_type -> vault.v1.StepDownResponse
-	42, // [42:66] is the sub-list for method output_type
-	18, // [18:42] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	54, // 18: vault.v1.CreateUserRequest.user:type_name -> vault.v1.User
+	54, // 19: vault.v1.ListUsersResponse.users:type_name -> vault.v1.User
+	0,  // 20: vault.v1.NodeService.PutChunk:input_type -> vault.v1.PutChunkRequest
+	2,  // 21: vault.v1.NodeService.GetChunk:input_type -> vault.v1.GetChunkRequest
+	4,  // 22: vault.v1.NodeService.DeleteChunk:input_type -> vault.v1.DeleteChunkRequest
+	6,  // 23: vault.v1.NodeService.PushChunk:input_type -> vault.v1.PushChunkRequest
+	8,  // 24: vault.v1.NodeService.SetFault:input_type -> vault.v1.SetFaultRequest
+	11, // 25: vault.v1.MetaService.Heartbeat:input_type -> vault.v1.HeartbeatRequest
+	13, // 26: vault.v1.MetaService.ReportCorrupt:input_type -> vault.v1.ReportCorruptRequest
+	15, // 27: vault.v1.MetaService.ListNodes:input_type -> vault.v1.ListNodesRequest
+	18, // 28: vault.v1.MetaService.CreateBucket:input_type -> vault.v1.CreateBucketRequest
+	20, // 29: vault.v1.MetaService.DeleteBucket:input_type -> vault.v1.DeleteBucketRequest
+	22, // 30: vault.v1.MetaService.GetBucket:input_type -> vault.v1.GetBucketRequest
+	24, // 31: vault.v1.MetaService.ListBuckets:input_type -> vault.v1.ListBucketsRequest
+	28, // 32: vault.v1.MetaService.CommitObject:input_type -> vault.v1.CommitObjectRequest
+	30, // 33: vault.v1.MetaService.GetObject:input_type -> vault.v1.GetObjectRequest
+	32, // 34: vault.v1.MetaService.DeleteObject:input_type -> vault.v1.DeleteObjectRequest
+	34, // 35: vault.v1.MetaService.CopyObject:input_type -> vault.v1.CopyObjectRequest
+	36, // 36: vault.v1.MetaService.ListObjects:input_type -> vault.v1.ListObjectsRequest
+	38, // 37: vault.v1.MetaService.CreateUpload:input_type -> vault.v1.CreateUploadRequest
+	40, // 38: vault.v1.MetaService.CommitPart:input_type -> vault.v1.CommitPartRequest
+	43, // 39: vault.v1.MetaService.CompleteUpload:input_type -> vault.v1.CompleteUploadRequest
+	45, // 40: vault.v1.MetaService.AbortUpload:input_type -> vault.v1.AbortUploadRequest
+	47, // 41: vault.v1.MetaService.ClusterStatus:input_type -> vault.v1.ClusterStatusRequest
+	50, // 42: vault.v1.MetaService.RaftStatus:input_type -> vault.v1.RaftStatusRequest
+	52, // 43: vault.v1.MetaService.StepDown:input_type -> vault.v1.StepDownRequest
+	55, // 44: vault.v1.MetaService.CreateUser:input_type -> vault.v1.CreateUserRequest
+	57, // 45: vault.v1.MetaService.DeleteUser:input_type -> vault.v1.DeleteUserRequest
+	59, // 46: vault.v1.MetaService.ListUsers:input_type -> vault.v1.ListUsersRequest
+	1,  // 47: vault.v1.NodeService.PutChunk:output_type -> vault.v1.PutChunkResponse
+	3,  // 48: vault.v1.NodeService.GetChunk:output_type -> vault.v1.GetChunkResponse
+	5,  // 49: vault.v1.NodeService.DeleteChunk:output_type -> vault.v1.DeleteChunkResponse
+	7,  // 50: vault.v1.NodeService.PushChunk:output_type -> vault.v1.PushChunkResponse
+	9,  // 51: vault.v1.NodeService.SetFault:output_type -> vault.v1.SetFaultResponse
+	12, // 52: vault.v1.MetaService.Heartbeat:output_type -> vault.v1.HeartbeatResponse
+	14, // 53: vault.v1.MetaService.ReportCorrupt:output_type -> vault.v1.ReportCorruptResponse
+	16, // 54: vault.v1.MetaService.ListNodes:output_type -> vault.v1.ListNodesResponse
+	19, // 55: vault.v1.MetaService.CreateBucket:output_type -> vault.v1.CreateBucketResponse
+	21, // 56: vault.v1.MetaService.DeleteBucket:output_type -> vault.v1.DeleteBucketResponse
+	23, // 57: vault.v1.MetaService.GetBucket:output_type -> vault.v1.GetBucketResponse
+	25, // 58: vault.v1.MetaService.ListBuckets:output_type -> vault.v1.ListBucketsResponse
+	29, // 59: vault.v1.MetaService.CommitObject:output_type -> vault.v1.CommitObjectResponse
+	31, // 60: vault.v1.MetaService.GetObject:output_type -> vault.v1.GetObjectResponse
+	33, // 61: vault.v1.MetaService.DeleteObject:output_type -> vault.v1.DeleteObjectResponse
+	35, // 62: vault.v1.MetaService.CopyObject:output_type -> vault.v1.CopyObjectResponse
+	37, // 63: vault.v1.MetaService.ListObjects:output_type -> vault.v1.ListObjectsResponse
+	39, // 64: vault.v1.MetaService.CreateUpload:output_type -> vault.v1.CreateUploadResponse
+	41, // 65: vault.v1.MetaService.CommitPart:output_type -> vault.v1.CommitPartResponse
+	44, // 66: vault.v1.MetaService.CompleteUpload:output_type -> vault.v1.CompleteUploadResponse
+	46, // 67: vault.v1.MetaService.AbortUpload:output_type -> vault.v1.AbortUploadResponse
+	49, // 68: vault.v1.MetaService.ClusterStatus:output_type -> vault.v1.ClusterStatusResponse
+	51, // 69: vault.v1.MetaService.RaftStatus:output_type -> vault.v1.RaftStatusResponse
+	53, // 70: vault.v1.MetaService.StepDown:output_type -> vault.v1.StepDownResponse
+	56, // 71: vault.v1.MetaService.CreateUser:output_type -> vault.v1.CreateUserResponse
+	58, // 72: vault.v1.MetaService.DeleteUser:output_type -> vault.v1.DeleteUserResponse
+	60, // 73: vault.v1.MetaService.ListUsers:output_type -> vault.v1.ListUsersResponse
+	47, // [47:74] is the sub-list for method output_type
+	20, // [20:47] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_vault_v1_vault_proto_init() }
@@ -3312,7 +3639,7 @@ func file_vault_v1_vault_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vault_v1_vault_proto_rawDesc), len(file_vault_v1_vault_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   57,
+			NumMessages:   64,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -22,16 +22,17 @@ const (
 // sigCtx is what a verified request carries forward: the pieces needed to
 // check aws-chunked chunk signatures.
 type sigCtx struct {
-	seed  string
-	key   []byte
-	scope string
-	date  string
+	accessKey string
+	seed      string
+	key       []byte
+	scope     string
+	date      string
 }
 
-// verifySigV4 checks the Authorization header of r against the secret for
-// accessKey. It returns the S3 error code on failure.
+// verifySigV4 checks the Authorization header of r against the secret that
+// secretOf returns for the request's access key. It returns the S3 error code on failure.
 // ponytail: header auth only; presigned URLs (query auth) not supported.
-func verifySigV4(r *http.Request, accessKey, secretKey string, now time.Time) (*sigCtx, string) {
+func verifySigV4(r *http.Request, secretOf func(accessKey string) (string, bool), now time.Time) (*sigCtx, string) {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
 		return nil, "AccessDenied"
@@ -52,7 +53,8 @@ func verifySigV4(r *http.Request, accessKey, secretKey string, now time.Time) (*
 	if len(cred) != 5 || cred[4] != "aws4_request" || signed == "" || fields["Signature"] == "" {
 		return nil, "AuthorizationHeaderMalformed"
 	}
-	if cred[0] != accessKey {
+	secretKey, ok := secretOf(cred[0])
+	if !ok {
 		return nil, "InvalidAccessKeyId"
 	}
 
@@ -79,7 +81,7 @@ func verifySigV4(r *http.Request, accessKey, secretKey string, now time.Time) (*
 	if !hmac.Equal([]byte(want), []byte(fields["Signature"])) {
 		return nil, "SignatureDoesNotMatch"
 	}
-	return &sigCtx{seed: want, key: key, scope: scope, date: amzDate}, ""
+	return &sigCtx{accessKey: cred[0], seed: want, key: key, scope: scope, date: amzDate}, ""
 }
 
 func canonicalRequest(r *http.Request, signed []string, payload string) string {

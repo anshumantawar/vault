@@ -6,9 +6,11 @@ package gateway
 import (
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -24,6 +26,7 @@ import (
 	vaultv1 "vault/gen/vault/v1"
 	"vault/internal/meta"
 	"vault/internal/node"
+	"vault/internal/pki"
 	"vault/internal/placement"
 	"vault/internal/wire"
 )
@@ -32,8 +35,13 @@ type Config struct {
 	S3Addr    string
 	UIAddr    string // empty disables the UI
 	MetaAddrs []string
+	// AccessKey/SecretKey are the bootstrap admin, created in the cluster's
+	// user table on first start. Other users are managed in the Users app.
 	AccessKey string
 	SecretKey string
+	TLS       *wire.TLS // gateway certificate: mutual TLS inside, HTTPS outside
+	// PlainHTTP serves S3 and the UI without TLS. Only allowed on loopback.
+	PlainHTTP bool
 }
 
 type Gateway struct {
@@ -41,6 +49,9 @@ type Gateway struct {
 	pool  *wire.Pool
 	meta  *meta.Client
 	nodes atomic.Pointer[[]*vaultv1.Node]
+	users users
+
+	sessionKey []byte // signs UI session cookies
 
 	faultMu sync.Mutex
 	faults  map[string]*vaultv1.SetFaultRequest // UI-issued fault state per node
@@ -48,27 +59,51 @@ type Gateway struct {
 	hist *history // Stats app timeline; only sampled when the UI is enabled
 }
 
-const from = "gateway"
-
 // Run serves the S3 API (and UI) until ctx is cancelled.
 func Run(ctx context.Context, cfg Config) error {
-	pool := wire.NewPool()
+	if cfg.TLS == nil || cfg.TLS.Self.Role != pki.RoleGateway {
+		return errors.New("gateway needs a gateway certificate")
+	}
+	if len(cfg.AccessKey) < 8 || len(cfg.SecretKey) < 16 {
+		return errors.New("admin access key must be ≥ 8 characters and secret ≥ 16")
+	}
+	if cfg.PlainHTTP {
+		for _, a := range []string{cfg.S3Addr, cfg.UIAddr} {
+			if a != "" && !isLoopback(a) {
+				return fmt.Errorf("plain HTTP is only allowed on loopback, not %s", a)
+			}
+		}
+	}
+	pool := wire.NewPool(cfg.TLS)
 	defer pool.Close()
-	g := &Gateway{cfg: cfg, pool: pool, meta: meta.NewClient(cfg.MetaAddrs, pool, from), faults: map[string]*vaultv1.SetFaultRequest{}, hist: &history{}}
+	g := &Gateway{cfg: cfg, pool: pool, meta: meta.NewClient(cfg.MetaAddrs, pool), faults: map[string]*vaultv1.SetFaultRequest{}, hist: &history{}}
+	g.sessionKey = make([]byte, 32)
+	rand.Read(g.sessionKey)
 	g.nodes.Store(&[]*vaultv1.Node{})
 	go g.refreshNodes(ctx)
+	go g.usersLoop(ctx)
 
 	servers := []*http.Server{{Addr: cfg.S3Addr, Handler: http.HandlerFunc(g.serveS3)}}
 	if cfg.UIAddr != "" {
 		servers = append(servers, &http.Server{Addr: cfg.UIAddr, Handler: g.uiHandler()})
 		go g.sampleLoop(ctx)
 	}
+	scheme := "https"
+	if cfg.PlainHTTP {
+		scheme = "http"
+	}
 	errc := make(chan error, len(servers))
 	for _, srv := range servers {
 		srv.BaseContext = func(net.Listener) context.Context { return ctx }
-		go func() { errc <- srv.ListenAndServe() }()
+		srv.ReadHeaderTimeout = 10 * time.Second
+		if cfg.PlainHTTP {
+			go func() { errc <- srv.ListenAndServe() }()
+			continue
+		}
+		srv.TLSConfig = cfg.TLS.HTTPS.Clone() // net/http edits it (HTTP/2 setup): one copy per server
+		go func() { errc <- srv.ListenAndServeTLS("", "") }()
 	}
-	log.Printf("gateway: S3 on http://%s, UI on http://%s", cfg.S3Addr, cfg.UIAddr)
+	log.Printf("gateway %s: S3 on %s://%s, UI on %s://%s", cfg.TLS.Self.ID, scheme, cfg.S3Addr, scheme, cfg.UIAddr)
 	select {
 	case <-ctx.Done():
 		for _, srv := range servers {
@@ -78,6 +113,18 @@ func Run(ctx context.Context, cfg Config) error {
 	case err := <-errc:
 		return err
 	}
+}
+
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (g *Gateway) refreshNodes(ctx context.Context) {
@@ -175,7 +222,7 @@ func (g *Gateway) writeChunk(ctx context.Context, sha string, data []byte, repli
 			wg.Go(func() {
 				cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 				defer cancel()
-				at, err := node.SendChunk(cctx, g.pool, from, byID[t.ID].Addr, sha, data)
+				at, err := node.SendChunk(cctx, g.pool, byID[t.ID].Addr, sha, data)
 				if err != nil {
 					log.Printf("gateway: put %.12s on %s: %v", sha, t.ID, status.Convert(err).Message())
 					return
@@ -241,7 +288,7 @@ func (g *Gateway) fetchChunk(ctx context.Context, c *vaultv1.Chunk) ([]byte, err
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		data, err := node.FetchChunk(cctx, g.pool, from, n.Addr, c.GetSha256())
+		data, err := node.FetchChunk(cctx, g.pool, n.Addr, c.GetSha256())
 		cancel()
 		if err == nil {
 			return data, nil

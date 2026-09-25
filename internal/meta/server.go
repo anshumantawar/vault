@@ -6,6 +6,7 @@ package meta
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	vaultv1 "vault/gen/vault/v1"
+	"vault/internal/pki"
 	"vault/internal/wire"
 )
 
@@ -38,7 +40,40 @@ type Config struct {
 	Dir      string
 	// Peers maps every member's id to its raft address, including this one.
 	Peers map[string]string
+	TLS   *wire.TLS // this member's certificate; its id must equal ID
 }
+
+// rules: every metadata RPC is for gateways, except what nodes report.
+var rules = func() wire.Rules {
+	r := wire.Rules{}
+	for _, m := range vaultv1.MetaService_ServiceDesc.Methods {
+		r["/"+vaultv1.MetaService_ServiceDesc.ServiceName+"/"+m.MethodName] = []string{pki.RoleGateway}
+	}
+	r[vaultv1.MetaService_Heartbeat_FullMethodName] = []string{pki.RoleNode}
+	r[vaultv1.MetaService_ReportCorrupt_FullMethodName] = []string{pki.RoleNode, pki.RoleGateway}
+	return r
+}()
+
+// onlyMeta rejects TLS peers that are not metadata members (Raft traffic).
+func onlyMeta(cs tls.ConnectionState) error {
+	if len(cs.PeerCertificates) == 0 || pki.IdentityOf(cs.PeerCertificates[0]).Role != pki.RoleMeta {
+		return errors.New("raft peer is not a metadata member")
+	}
+	return nil
+}
+
+// tlsStream is Raft's transport over mutual TLS, members only.
+type tlsStream struct {
+	net.Listener
+	advertise net.Addr
+	client    *tls.Config
+}
+
+func (s *tlsStream) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
+	return tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", string(addr), s.client)
+}
+
+func (s *tlsStream) Addr() net.Addr { return s.advertise }
 
 type Server struct {
 	vaultv1.UnimplementedMetaServiceServer
@@ -62,11 +97,14 @@ type Server struct {
 
 // Run serves the meta member until ctx is cancelled.
 func Run(ctx context.Context, cfg Config) error {
-	if err := os.MkdirAll(cfg.Dir, 0o755); err != nil {
+	if cfg.TLS == nil || cfg.TLS.Self.ID != cfg.ID || cfg.TLS.Self.Role != pki.RoleMeta {
+		return fmt.Errorf("meta %s needs its own meta certificate", cfg.ID)
+	}
+	if err := os.MkdirAll(cfg.Dir, 0o700); err != nil {
 		return err
 	}
 	s := &Server{
-		cfg: cfg, fsm: &fsm{st: newState()}, pool: wire.NewPool(),
+		cfg: cfg, fsm: &fsm{st: newState()}, pool: wire.NewPool(cfg.TLS),
 		lastSeen: map[string]time.Time{}, stats: map[string]*vaultv1.Node{}, inflight: map[string]bool{},
 	}
 	defer s.pool.Close()
@@ -95,10 +133,13 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	trans, err := raft.NewTCPTransport(cfg.RaftAddr, addr, 3, 5*time.Second, os.Stderr)
+	srvTLS, cliTLS := cfg.TLS.Server.Clone(), cfg.TLS.Client.Clone()
+	srvTLS.VerifyConnection, cliTLS.VerifyConnection = onlyMeta, onlyMeta
+	raftLis, err := tls.Listen("tcp", cfg.RaftAddr, srvTLS)
 	if err != nil {
 		return err
 	}
+	trans := raft.NewNetworkTransport(&tlsStream{Listener: raftLis, advertise: addr, client: cliTLS}, 3, 5*time.Second, os.Stderr)
 	defer trans.Close()
 	r, err := raft.NewRaft(rc, s.fsm, store, store, snaps, trans)
 	if err != nil {
@@ -121,7 +162,7 @@ func Run(ctx context.Context, cfg Config) error {
 		r.Shutdown()
 		return err
 	}
-	gs := grpc.NewServer()
+	gs := grpc.NewServer(append([]grpc.ServerOption{cfg.TLS.ServerCreds()}, rules.Interceptors()...)...)
 	vaultv1.RegisterMetaServiceServer(gs, s)
 
 	go s.watchLeadership(ctx, leaderCh)
@@ -178,13 +219,16 @@ func (s *Server) propose(c *command) (result, error) {
 
 // ---- nodes ----
 
-func (s *Server) Heartbeat(_ context.Context, req *vaultv1.HeartbeatRequest) (*vaultv1.HeartbeatResponse, error) {
+func (s *Server) Heartbeat(ctx context.Context, req *vaultv1.HeartbeatRequest) (*vaultv1.HeartbeatResponse, error) {
 	if err := s.leaderOnly(); err != nil {
 		return nil, err
 	}
 	n := req.GetNode()
 	if n.GetId() == "" || n.GetAddr() == "" {
 		return nil, status.Error(codes.InvalidArgument, "node id and addr required")
+	}
+	if c, _ := wire.Caller(ctx); c.ID != n.GetId() {
+		return nil, status.Errorf(codes.PermissionDenied, "node %q may not heartbeat as %q", c.ID, n.GetId())
 	}
 	s.fsm.mu.RLock()
 	known := s.fsm.st.Nodes[n.GetId()]
@@ -202,9 +246,12 @@ func (s *Server) Heartbeat(_ context.Context, req *vaultv1.HeartbeatRequest) (*v
 	return &vaultv1.HeartbeatResponse{}, nil
 }
 
-func (s *Server) ReportCorrupt(_ context.Context, req *vaultv1.ReportCorruptRequest) (*vaultv1.ReportCorruptResponse, error) {
+func (s *Server) ReportCorrupt(ctx context.Context, req *vaultv1.ReportCorruptRequest) (*vaultv1.ReportCorruptResponse, error) {
 	if err := s.leaderOnly(); err != nil {
 		return nil, err
+	}
+	if c, _ := wire.Caller(ctx); c.Role == pki.RoleNode && c.ID != req.GetNodeId() {
+		return nil, status.Errorf(codes.PermissionDenied, "node %q may only report its own copies", c.ID)
 	}
 	_, err := s.propose(&command{Op: "remove_holder", SHA: req.GetSha256(), NodeID: req.GetNodeId()})
 	if err == nil {
@@ -249,7 +296,7 @@ func (s *Server) CreateBucket(_ context.Context, req *vaultv1.CreateBucketReques
 	if b.GetReplicas() == 0 || b.GetWriteQuorum() == 0 || b.GetWriteQuorum() > b.GetReplicas() {
 		return nil, status.Error(codes.InvalidArgument, "InvalidArgument")
 	}
-	_, err := s.propose(&command{Op: "create_bucket", Name: b.GetName(), Bucket: &Bucket{Replicas: b.GetReplicas(), WriteQuorum: b.GetWriteQuorum()}})
+	_, err := s.propose(&command{Op: "create_bucket", Name: b.GetName(), Bucket: &Bucket{Replicas: b.GetReplicas(), WriteQuorum: b.GetWriteQuorum(), Owner: b.GetOwner()}})
 	return &vaultv1.CreateBucketResponse{}, err
 }
 
@@ -259,7 +306,7 @@ func (s *Server) DeleteBucket(_ context.Context, req *vaultv1.DeleteBucketReques
 }
 
 func bucketPB(name string, b *Bucket) *vaultv1.Bucket {
-	return &vaultv1.Bucket{Name: name, Replicas: b.Replicas, WriteQuorum: b.WriteQuorum, CreatedAt: b.CreatedAt}
+	return &vaultv1.Bucket{Name: name, Replicas: b.Replicas, WriteQuorum: b.WriteQuorum, CreatedAt: b.CreatedAt, Owner: b.Owner}
 }
 
 func (s *Server) GetBucket(_ context.Context, req *vaultv1.GetBucketRequest) (*vaultv1.GetBucketResponse, error) {
@@ -511,4 +558,32 @@ func (s *Server) StepDown(context.Context, *vaultv1.StepDownRequest) (*vaultv1.S
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	return &vaultv1.StepDownResponse{}, nil
+}
+
+// ---- users ----
+
+func (s *Server) CreateUser(_ context.Context, req *vaultv1.CreateUserRequest) (*vaultv1.CreateUserResponse, error) {
+	u := req.GetUser()
+	if len(u.GetAccessKey()) < 8 || len(u.GetSecretKey()) < 16 || u.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "InvalidArgument")
+	}
+	_, err := s.propose(&command{Op: "create_user", User: &User{AccessKey: u.GetAccessKey(), Secret: u.GetSecretKey(), Name: u.GetName(), Admin: u.GetAdmin()}})
+	return &vaultv1.CreateUserResponse{}, err
+}
+
+func (s *Server) DeleteUser(_ context.Context, req *vaultv1.DeleteUserRequest) (*vaultv1.DeleteUserResponse, error) {
+	_, err := s.propose(&command{Op: "delete_user", Key: req.GetAccessKey()})
+	return &vaultv1.DeleteUserResponse{}, err
+}
+
+func (s *Server) ListUsers(context.Context, *vaultv1.ListUsersRequest) (*vaultv1.ListUsersResponse, error) {
+	resp := &vaultv1.ListUsersResponse{}
+	err := s.read(func(st *state) error {
+		for _, k := range slices.Sorted(maps.Keys(st.Users)) {
+			u := st.Users[k]
+			resp.Users = append(resp.Users, &vaultv1.User{AccessKey: k, SecretKey: u.Secret, Name: u.Name, Admin: u.Admin, CreatedAt: u.CreatedAt})
+		}
+		return nil
+	})
+	return resp, err
 }

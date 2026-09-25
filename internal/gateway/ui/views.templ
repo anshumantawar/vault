@@ -2,14 +2,11 @@ package ui
 
 import "fmt"
 
-// Desktop is the whole OS shell; apps load into windows via htmx.
-templ Desktop() {
-	<!DOCTYPE html>
-	<html lang="en">
-		<head>
+// pageHead is the shared <head>: theme, htmx and every style.
+templ pageHead(title string) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>Vault OS</title>
+			<title>{ title }</title>
 			<link rel="icon" href="/static/logo.svg" type="image/svg+xml"/>
 			<script>
 				// Apply the saved theme before first paint, so there's no flash.
@@ -268,6 +265,20 @@ templ Desktop() {
 				#dock .d-stats .ico { background: linear-gradient(160deg, #4cd98a, #179a55); }
 				#dock .d-connect .ico { background: linear-gradient(160deg, #4a4a4f, #1d1d20); }
 				#dock .d-present .ico { background: linear-gradient(160deg, #ffb347, #f06a1f); }
+				#dock .d-users .ico { background: linear-gradient(160deg, #8b7bff, #5b4bd6); }
+				#bar .me { gap: 8px; }
+				#bar .me .role { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+				.login { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; }
+				.login form { width: min(360px, 100%); display: grid; gap: 12px; padding: 28px; border-radius: 16px; box-shadow: var(--shadow);
+					background: color-mix(in srgb, var(--win) 82%, transparent); backdrop-filter: saturate(180%) blur(24px); -webkit-backdrop-filter: saturate(180%) blur(24px); border: 1px solid var(--line); }
+				.login h1 { margin: 4px 0 0; font-size: 22px; }
+				.login label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+				.login input { font-size: 14px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--win); color: var(--text); }
+				.login .btn { padding: 8px; font-size: 14px; }
+				.secret { display: grid; gap: 6px; padding: 12px; border-radius: 10px; background: var(--soft); border: 1px solid var(--line); }
+				.users-t { width: 100%; border-collapse: collapse; font-size: 12px; }
+				.users-t td, .users-t th { text-align: left; padding: 6px 6px 6px 0; border-bottom: 1px solid var(--line); }
+				.users-t th { color: var(--muted); font-weight: 500; font-size: 11px; }
 				#dock .doc .ico { background: linear-gradient(160deg, #c6c6cc, #8e8e96); font-size: 11px; font-weight: 700; }
 				#dock .tip { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); padding: 3px 9px; border-radius: 6px; font-size: 12px; white-space: nowrap;
 					background: var(--win); border: 1px solid var(--line); box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .12s; }
@@ -381,13 +392,24 @@ templ Desktop() {
 					.rz, #bar .hint { display: none; }
 				}
 			</style>
+}
+
+// Desktop is the whole OS shell; apps load into windows via htmx.
+// Admins get the cluster apps; other users get their own files and keys.
+templ Desktop(me Session) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			@pageHead("Vault OS")
 		</head>
-		<body>
+		<body data-admin?={ me.Admin }>
 			<div id="bar">
 				<span class="item">@Logo(16, "bar")<span class="app" id="app-name">Vault OS</span></span>
 				<span class="item hint">S3-compatible, self-healing object storage</span>
 				<span class="spacer"></span>
-				<span class="item status" hx-get="/app/pulse" hx-trigger="load, every 2s"><span class="dot idle"></span></span>
+				if me.Admin {
+					<span class="item status" hx-get="/app/pulse" hx-trigger="load, every 2s"><span class="dot idle"></span></span>
+				}
 				<span class="item">
 					<span class="theme" role="group" aria-label="Theme">
 						<button data-theme-set="system" title="Match system" aria-label="Match system"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"></rect><path d="M5.5 14h5M8 11.5V14"></path></svg></button>
@@ -396,21 +418,37 @@ templ Desktop() {
 					</span>
 				</span>
 				<span class="item" id="clock"></span>
+				<form class="item me" method="post" action="/logout">
+					<span title={ me.AccessKey }>{ me.Name }</span>
+					if me.Admin {
+						<span class="role">admin</span>
+					}
+					<button class="btn xs" type="submit">Log out</button>
+				</form>
 			</div>
 			<div id="desk"></div>
 			<nav id="dock">
 				<button class="d-files" data-open="files" data-title="Files" data-url="/app/files" aria-label="Files">
 					<span class="ico"><svg viewBox="0 0 24 24" fill="#fff"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2h8.4A1.5 1.5 0 0 1 21 8.5V17.5A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5Z" opacity=".95"></path></svg></span><span class="tip">Files</span><span class="run"></span>
 				</button>
-				<button class="d-stats" data-open="stats" data-title="Stats" data-url="/app/stats" aria-label="Stats">
-					<span class="ico"><svg viewBox="0 0 24 24" fill="#fff"><rect x="4" y="12" width="3.5" height="7" rx="1"></rect><rect x="10.25" y="7" width="3.5" height="12" rx="1"></rect><rect x="16.5" y="4" width="3.5" height="15" rx="1"></rect></svg></span><span class="tip">Stats</span><span class="run"></span>
-				</button>
+				if me.Admin {
+					<button class="d-stats" data-open="stats" data-title="Stats" data-url="/app/stats" aria-label="Stats">
+						<span class="ico"><svg viewBox="0 0 24 24" fill="#fff"><rect x="4" y="12" width="3.5" height="7" rx="1"></rect><rect x="10.25" y="7" width="3.5" height="12" rx="1"></rect><rect x="16.5" y="4" width="3.5" height="15" rx="1"></rect></svg></span><span class="tip">Stats</span><span class="run"></span>
+					</button>
+				}
 				<button class="d-connect" data-open="connect" data-title="Connect" data-url="/app/connect" aria-label="Connect">
 					<span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 8 4 4-4 4M12.5 16H18"></path></svg></span><span class="tip">Connect</span><span class="run"></span>
 				</button>
-				<button class="d-present" data-open="present" data-title="Present" data-url="/app/present?n=0" aria-label="Present">
-					<span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M10 8.2v5.6l4.6-2.8Z" fill="#fff" stroke="none"></path><path d="M8 21h8M12 17v4"></path></svg></span><span class="tip">Present</span><span class="run"></span>
-				</button>
+				if me.Admin {
+					<button class="d-present" data-open="present" data-title="Present" data-url="/app/present?n=0" aria-label="Present">
+						<span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M10 8.2v5.6l4.6-2.8Z" fill="#fff" stroke="none"></path><path d="M8 21h8M12 17v4"></path></svg></span><span class="tip">Present</span><span class="run"></span>
+					</button>
+				}
+				if me.Admin {
+					<button class="d-users" data-open="users" data-title="Users" data-url="/app/users" aria-label="Users">
+						<span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3.5 19c.6-3.2 2.9-5 5.5-5s4.9 1.8 5.5 5"></path><path d="M15.5 5.2a3 3 0 0 1 0 5.6M17.5 14.3c1.6.7 2.7 2.3 3 4.7"></path></svg></span><span class="tip">Users</span><span class="run"></span>
+					</button>
+				}
 				<span class="sep"></span>
 			</nav>
 			<div id="ctx" role="menu" hidden></div>
@@ -433,7 +471,7 @@ templ Desktop() {
 			<script>
 			(() => {
 				const desk = document.getElementById('desk');
-				const sizes = { files: [640, 480], stats: [760, 720], connect: [460, 340], present: [980, 660] };
+				const sizes = { files: [640, 480], stats: [760, 720], connect: [520, 420], present: [980, 660], users: [620, 480] };
 				let z = 10, cascade = 0;
 
 				const dock = document.getElementById('dock');
@@ -638,7 +676,7 @@ templ Desktop() {
 				const changed = () => htmx.trigger(document.body, 'vault:changed');
 				const q = encodeURIComponent;
 				const s3uri = (b, k = '') => `s3://${b}/${k}`;
-				const apps = [['files', 'Files', '/app/files'], ['stats', 'Stats', '/app/stats'], ['connect', 'Connect', '/app/connect'], ['present', 'Present', '/app/present?n=0']];
+				const apps = () => [...dock.querySelectorAll('button[data-open]')].map(b => [b.dataset.open, b.dataset.title, b.dataset.url]);
 
 				const menuFor = e => {
 					const t = e.target;
@@ -724,7 +762,7 @@ templ Desktop() {
 						const theme = document.documentElement.dataset.theme || 'system';
 						const setTheme = v => () => { applyTheme(v); try { localStorage.setItem('vault-theme', v); } catch {} };
 						return [{ head: 'Vault OS' },
-							...apps.map(([k, title, url]) => ({ label: 'Open ' + title, act: () => openApp(k, title, url) })),
+							...apps().map(([k, title, url]) => ({ label: 'Open ' + title, act: () => openApp(k, title, url) })),
 							{ sep: 1 },
 							{ head: 'Appearance' },
 							{ label: 'System', check: theme === 'system', act: setTheme('system') },
@@ -1178,11 +1216,12 @@ templ Desktop() {
 					refresh();
 				};
 				document.body.addEventListener('htmx:afterSettle', e => e.target.querySelectorAll?.('[data-stats]:not([data-mounted])').forEach(mountStats));
+				document.body.addEventListener('htmx:responseError', e => { if (e.detail.xhr.status === 401) location.href = '/login'; });
 
 				// Start with the two apps that tell the story side by side.
 				const half = desk.clientWidth / 2;
 				openApp('files', 'Files', '/app/files', desk.clientWidth > 1100 ? [Math.max(16, half - 640), 24] : null);
-				openApp('stats', 'Stats', '/app/stats', desk.clientWidth > 1100 ? [half - 20, 12] : null);
+				if (document.body.hasAttribute('data-admin')) openApp('stats', 'Stats', '/app/stats', desk.clientWidth > 1100 ? [half - 20, 12] : null);
 			})();
 			</script>
 		</body>
@@ -1383,11 +1422,87 @@ templ StatsApp() {
 
 // ---- Connect ----
 
-templ ConnectApp(endpoint, accessKey string) {
-	<p>Vault speaks the S3 API. Point any S3 tool at it:</p>
-	<pre>{ "export AWS_ENDPOINT_URL=http://" + endpoint + "\nexport AWS_ACCESS_KEY_ID=" + accessKey + "\nexport AWS_SECRET_ACCESS_KEY=$VAULT_SECRET_KEY\nexport AWS_DEFAULT_REGION=us-east-1" }</pre>
-	<pre>{ "aws s3 mb s3://photos\naws s3 sync ./pics s3://photos/\naws s3 ls s3://photos/\naws s3 cp s3://photos/cat.jpg ." }</pre>
-	<p class="muted">Uploads from the CLI show up in Files; every write lands on 3 nodes in different zones.</p>
+templ ConnectApp(endpoint, accessKey string, https bool) {
+	<p>Vault speaks the S3 API. Point any S3 tool at it with <b>your</b> keys:</p>
+	if https {
+		<pre>{ "export AWS_ENDPOINT_URL=" + endpoint + "\nexport AWS_CA_BUNDLE=data/certs/ca.pem   # Vault's private CA\nexport AWS_ACCESS_KEY_ID=" + accessKey + "\nexport AWS_SECRET_ACCESS_KEY=<your secret key>\nexport AWS_DEFAULT_REGION=us-east-1" }</pre>
+	} else {
+		<pre>{ "export AWS_ENDPOINT_URL=" + endpoint + "\nexport AWS_ACCESS_KEY_ID=" + accessKey + "\nexport AWS_SECRET_ACCESS_KEY=<your secret key>\nexport AWS_DEFAULT_REGION=us-east-1" }</pre>
+	}
+	<pre>{ "aws s3 mb s3://my-photos\naws s3 sync ./pics s3://my-photos/\naws s3 ls\naws s3 cp s3://my-photos/cat.jpg ." }</pre>
+	<p class="muted">You only see and touch your own buckets. Your secret key was shown once, when your account was created; ask an admin for a new user if you lost it.</p>
+}
+
+// Login is the sign-in page: the same access keys as the S3 API.
+templ Login(msg string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			@pageHead("Sign in · Vault")
+		</head>
+		<body>
+			<main class="login">
+				<form method="post" action="/login">
+					@Logo(44, "login")
+					<h1>Sign in to Vault</h1>
+					<p class="muted" style="margin:0">Use your Vault access key and secret key.</p>
+					if msg != "" {
+						<p class="err" role="alert">{ msg }</p>
+					}
+					<label>Access key<input name="access_key" autocomplete="username" required autofocus/></label>
+					<label>Secret key<input name="secret_key" type="password" autocomplete="current-password" required/></label>
+					<button class="btn dark" type="submit">Sign in</button>
+				</form>
+			</main>
+		</body>
+	</html>
+}
+
+// UsersApp lists tenants; a new user's secret is shown exactly once.
+templ UsersApp(users []UserRow, created *NewUser, msg string) {
+	<div class="users" style="display:grid;gap:12px">
+		if msg != "" {
+			<p class="err">{ msg }</p>
+		}
+		if created != nil {
+			<div class="secret">
+				<b>{ created.Name } can now sign in and use the S3 API.</b>
+				<span class="muted">Copy the secret now: it will not be shown again.</span>
+				<pre>{ "Access key: " + created.AccessKey + "\nSecret key: " + created.SecretKey }</pre>
+				<div class="row"><button class="btn xs" data-copy={ created.SecretKey }>Copy secret</button></div>
+			</div>
+		}
+		<form class="row" hx-post="/app/users" hx-target="closest .win-body" hx-swap="innerHTML">
+			<input type="text" name="name" placeholder="name, e.g. alice" required maxlength="64"/>
+			<label class="row" style="gap:4px"><input type="checkbox" name="admin"/> admin</label>
+			<button class="btn dark" type="submit">Create user</button>
+		</form>
+		<table class="users-t">
+			<tr><th>Name</th><th>Access key</th><th>Role</th><th>Created</th><th></th></tr>
+			for _, u := range users {
+				<tr>
+					<td>{ u.Name }</td>
+					<td><code>{ u.AccessKey }</code></td>
+					<td>
+						if u.Admin {
+							admin
+						} else {
+							user
+						}
+					</td>
+					<td class="muted">{ u.Created }</td>
+					<td>
+						if u.You {
+							<span class="muted">you</span>
+						} else {
+							<button class="btn xs red" hx-post={ "/app/users/delete?key=" + urlq(u.AccessKey) } hx-confirm={ "Delete " + u.Name + "? Their keys stop working within seconds." } hx-target="closest .win-body" hx-swap="innerHTML">Delete</button>
+						}
+					</td>
+				</tr>
+			}
+		</table>
+		<p class="muted">Users see and manage only the buckets they create. Admins see everything and can use Stats, Present and fault injection.</p>
+	</div>
 }
 
 // ---- Logo ----

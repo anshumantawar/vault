@@ -95,6 +95,11 @@ service MetaService {
   rpc ClusterStatus(ClusterStatusRequest) returns (ClusterStatusResponse);
   rpc RaftStatus(RaftStatusRequest) returns (RaftStatusResponse);
   rpc StepDown(StepDownRequest) returns (StepDownResponse);
+
+  // Tenants. Secrets are returned to gateways only: they verify SigV4.
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
 }
 
 message Node {
@@ -134,6 +139,9 @@ message Bucket {
   uint32 replicas = 2;
   uint32 write_quorum = 3;
   int64 created_at = 4;
+  // Access key of the owning user. Empty for buckets created before tenancy:
+  // only admins may use those.
+  string owner = 5;
 }
 
 message CreateBucketRequest {
@@ -324,3 +332,29 @@ message RaftStatusResponse {
 message StepDownRequest {}
 
 message StepDownResponse {}
+
+message User {
+  string access_key = 1;
+  string secret_key = 2;
+  string name = 3;
+  bool admin = 4;
+  int64 created_at = 5;
+}
+
+message CreateUserRequest {
+  User user = 1;
+}
+
+message CreateUserResponse {}
+
+message DeleteUserRequest {
+  string access_key = 1;
+}
+
+message DeleteUserResponse {}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  repeated User users = 1;
+}

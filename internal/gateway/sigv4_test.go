@@ -20,6 +20,10 @@ const (
 
 var exNow = time.Date(2013, 5, 24, 0, 0, 0, 0, time.UTC)
 
+func keys(ak, sk string) func(string) (string, bool) {
+	return func(k string) (string, bool) { return sk, k == ak }
+}
+
 func auth(signed, sig string) string {
 	return "AWS4-HMAC-SHA256 Credential=" + exAccess + "/20130524/us-east-1/s3/aws4_request,SignedHeaders=" + signed + ",Signature=" + sig
 }
@@ -39,16 +43,16 @@ func TestSigV4AWSExamples(t *testing.T) {
 	put.Header.Set("Authorization", auth("date;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class", "98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd"))
 
 	for name, r := range map[string]*http.Request{"GET object": get, "PUT object": put} {
-		if _, code := verifySigV4(r, exAccess, exSecret, exNow); code != "" {
+		if _, code := verifySigV4(r, keys(exAccess, exSecret), exNow); code != "" {
 			t.Errorf("%s: %s", name, code)
 		}
 	}
 
 	get.Header.Set("Range", "bytes=0-10")
-	if _, code := verifySigV4(get, exAccess, exSecret, exNow); code != "SignatureDoesNotMatch" {
+	if _, code := verifySigV4(get, keys(exAccess, exSecret), exNow); code != "SignatureDoesNotMatch" {
 		t.Errorf("tampered header: got %q", code)
 	}
-	if _, code := verifySigV4(put, exAccess, exSecret, exNow.Add(time.Hour)); code != "RequestTimeTooSkewed" {
+	if _, code := verifySigV4(put, keys(exAccess, exSecret), exNow.Add(time.Hour)); code != "RequestTimeTooSkewed" {
 		t.Errorf("skewed clock: got %q", code)
 	}
 }
@@ -75,7 +79,7 @@ func TestAWSChunkedSignedExample(t *testing.T) {
 	r.Header.Set("Authorization", auth("content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-storage-class",
 		"4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9"))
 
-	sig, code := verifySigV4(r, exAccess, exSecret, exNow)
+	sig, code := verifySigV4(r, keys(exAccess, exSecret), exNow)
 	if code != "" {
 		t.Fatalf("seed signature: %s", code)
 	}
@@ -104,7 +108,7 @@ func TestUnsignedTrailerChecksum(t *testing.T) {
 	}
 	for crc, wantErr := range map[string]bool{"NhCmhg==": false, "AAAAAA==": true} {
 		r := mk(crc)
-		sig, code := verifySigV4(r, "ak", "sk", time.Now())
+		sig, code := verifySigV4(r, keys("ak", "sk"), time.Now())
 		if code != "" {
 			t.Fatal(code)
 		}

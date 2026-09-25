@@ -11,7 +11,6 @@ import (
 
 	vaultv1 "vault/gen/vault/v1"
 	"vault/internal/placement"
-	"vault/internal/wire"
 )
 
 const (
@@ -210,7 +209,7 @@ func (s *Server) copyChunk(ctx context.Context, sha string, sources, targets []s
 			if err != nil {
 				continue
 			}
-			cctx, cancel := context.WithTimeout(wire.WithFrom(ctx, "meta"), 15*time.Second)
+			cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			_, err = c.PushChunk(cctx, &vaultv1.PushChunkRequest{Sha256: sha, TargetId: t, TargetAddr: addr[t]})
 			cancel()
 			if err != nil {
@@ -244,7 +243,7 @@ func (s *Server) trim(ctx context.Context, sha, node, addr string) {
 		return
 	}
 	if c, err := s.nodeClient(addr); err == nil {
-		cctx, cancel := context.WithTimeout(wire.WithFrom(ctx, "meta"), 5*time.Second)
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		c.DeleteChunk(cctx, &vaultv1.DeleteChunkRequest{Sha256: sha, IfWrittenBefore: before.UnixNano()})
 		cancel()
 	}
@@ -293,7 +292,7 @@ func (s *Server) gc(ctx context.Context) {
 			if err != nil {
 				continue
 			}
-			cctx, cancel := context.WithTimeout(wire.WithFrom(ctx, "meta"), 5*time.Second)
+			cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			_, err = c.DeleteChunk(cctx, &vaultv1.DeleteChunkRequest{Sha256: sha, IfWrittenBefore: t.At})
 			cancel()
 			if err == nil {

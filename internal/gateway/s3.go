@@ -28,7 +28,7 @@ const s3NS = "http://s3.amazonaws.com/doc/2006-03-01/"
 var errStatus = map[string]int{
 	"AccessDenied": 403, "InvalidAccessKeyId": 403, "SignatureDoesNotMatch": 403, "RequestTimeTooSkewed": 403,
 	"NoSuchBucket": 404, "NoSuchKey": 404, "NoSuchUpload": 404,
-	"BucketAlreadyOwnedByYou": 409, "BucketNotEmpty": 409,
+	"BucketAlreadyOwnedByYou": 409, "BucketAlreadyExists": 409, "BucketNotEmpty": 409,
 	"InvalidRange": 416, "MethodNotAllowed": 405, "NotImplemented": 501,
 	"InternalError": 500, "ServiceUnavailable": 503, "SlowDown": 503,
 }
@@ -91,14 +91,19 @@ func (g *Gateway) serveS3(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Amz-Request-Id", strings.ToUpper(hex.EncodeToString(id)))
 	w.Header().Set("Server", "Vault")
 
-	sig, code := verifySigV4(r, g.cfg.AccessKey, g.cfg.SecretKey, time.Now())
+	sig, code := verifySigV4(r, g.secretFor(r.Context()), time.Now())
 	if code != "" {
 		writeErr(w, r, errS3(code, "request signature rejected"))
 		return
 	}
+	u := g.user(r.Context(), sig.accessKey)
+	if u == nil {
+		writeErr(w, r, errS3("InvalidAccessKeyId", "user was deleted"))
+		return
+	}
 	bucket, key, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	q := r.URL.Query()
-	ctx := r.Context()
+	ctx := context.WithValue(r.Context(), ctxKey{}, u)
 
 	var err error
 	switch {
@@ -159,9 +164,12 @@ func (g *Gateway) listBuckets(ctx context.Context, w http.ResponseWriter) error 
 	if err != nil {
 		return err
 	}
-	out := listBucketsXML{NS: s3NS, OwnerID: "vault", Owner: "vault"}
+	u := sessionUser(ctx)
+	out := listBucketsXML{NS: s3NS, OwnerID: u.GetAccessKey(), Owner: u.GetName()}
 	for _, b := range resp.GetBuckets() {
-		out.Buckets = append(out.Buckets, bucketXML{b.GetName(), isoTime(b.GetCreatedAt())})
+		if canUse(u, b) {
+			out.Buckets = append(out.Buckets, bucketXML{b.GetName(), isoTime(b.GetCreatedAt())})
+		}
 	}
 	writeXML(w, out)
 	return nil
@@ -186,14 +194,22 @@ func parsePolicy(h string) (uint32, uint32, error) {
 	return uint32(n), uint32(wq), nil
 }
 
+// createBucket creates name owned by the signed-in user.
 func (g *Gateway) createBucket(ctx context.Context, name string, replicas, quorum uint32) error {
 	if !bucketName.MatchString(name) || strings.Contains(name, "..") {
 		return errS3("InvalidBucketName", "bucket names are 3-63 chars of a-z 0-9 . -")
 	}
-	return g.meta.Call(ctx, func(ctx context.Context, c vaultv1.MetaServiceClient) error {
-		_, err := c.CreateBucket(ctx, &vaultv1.CreateBucketRequest{Bucket: &vaultv1.Bucket{Name: name, Replicas: replicas, WriteQuorum: quorum}})
+	u := sessionUser(ctx)
+	err := g.meta.Call(ctx, func(ctx context.Context, c vaultv1.MetaServiceClient) error {
+		_, err := c.CreateBucket(ctx, &vaultv1.CreateBucketRequest{Bucket: &vaultv1.Bucket{Name: name, Replicas: replicas, WriteQuorum: quorum, Owner: u.GetAccessKey()}})
 		return err
 	})
+	if status.Code(err) == codes.AlreadyExists {
+		if b, gerr := g.getBucket(ctx, name); gerr == nil && b.GetOwner() != u.GetAccessKey() {
+			return errS3("BucketAlreadyExists", "bucket names are shared by all users; pick another")
+		}
+	}
+	return err
 }
 
 func (g *Gateway) deleteBucket(ctx context.Context, name string) error {
@@ -206,6 +222,11 @@ func (g *Gateway) deleteBucket(ctx context.Context, name string) error {
 func (g *Gateway) bucketOp(ctx context.Context, w http.ResponseWriter, r *http.Request, bucket string, q url.Values, sig *sigCtx) error {
 	if err := checkUnsupported(q); err != nil {
 		return err
+	}
+	if r.Method != http.MethodPut { // PUT creates the bucket, for its caller
+		if _, err := g.authorize(ctx, sessionUser(ctx), bucket); err != nil {
+			return err
+		}
 	}
 	switch r.Method {
 	case http.MethodPut:
@@ -427,6 +448,9 @@ func (g *Gateway) objectOp(ctx context.Context, w http.ResponseWriter, r *http.R
 	if err := checkUnsupported(q); err != nil {
 		return err
 	}
+	if _, err := g.authorize(ctx, sessionUser(ctx), bucket); err != nil {
+		return err
+	}
 	uploadID := q.Get("uploadId")
 	switch r.Method {
 	case http.MethodPut:
@@ -553,6 +577,9 @@ func (g *Gateway) copyObject(ctx context.Context, w http.ResponseWriter, r *http
 	if err != nil {
 		return err
 	}
+	if _, err := g.authorize(ctx, sessionUser(ctx), sb); err != nil {
+		return err
+	}
 	replace := strings.EqualFold(r.Header.Get("X-Amz-Metadata-Directive"), "REPLACE")
 	var o *vaultv1.Object
 	err = g.meta.Call(ctx, func(ctx context.Context, c vaultv1.MetaServiceClient) error {
@@ -632,6 +659,9 @@ func (g *Gateway) uploadPart(ctx context.Context, w http.ResponseWriter, r *http
 		// Identical 4 MB-aligned content dedups to the same chunks.
 		sb, sk, err := parseCopySource(copySrc)
 		if err != nil {
+			return err
+		}
+		if _, err := g.authorize(ctx, sessionUser(ctx), sb); err != nil {
 			return err
 		}
 		src, err := g.getObject(ctx, sb, sk)

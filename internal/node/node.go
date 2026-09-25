@@ -5,6 +5,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -20,6 +21,7 @@ import (
 
 	vaultv1 "vault/gen/vault/v1"
 	"vault/internal/meta"
+	"vault/internal/pki"
 	"vault/internal/wire"
 )
 
@@ -33,6 +35,16 @@ type Config struct {
 	MetaAddrs []string
 	// ScrubBytesPerSec limits background re-hashing.
 	ScrubBytesPerSec int64
+	TLS              *wire.TLS // this node's certificate; its id must equal ID
+}
+
+// rules: who may call what on a storage node.
+var rules = wire.Rules{
+	vaultv1.NodeService_PutChunk_FullMethodName:    {pki.RoleGateway, pki.RoleNode}, // nodes push repair copies to each other
+	vaultv1.NodeService_GetChunk_FullMethodName:    {pki.RoleGateway},
+	vaultv1.NodeService_DeleteChunk_FullMethodName: {pki.RoleMeta},
+	vaultv1.NodeService_PushChunk_FullMethodName:   {pki.RoleMeta},
+	vaultv1.NodeService_SetFault_FullMethodName:    {pki.RoleGateway},
 }
 
 type fault struct {
@@ -61,19 +73,19 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.ScrubBytesPerSec == 0 {
 		cfg.ScrubBytesPerSec = 64 << 20
 	}
-	pool := wire.NewPool()
+	if cfg.TLS == nil || cfg.TLS.Self.ID != cfg.ID || cfg.TLS.Self.Role != pki.RoleNode {
+		return fmt.Errorf("node %s needs its own node certificate", cfg.ID)
+	}
+	pool := wire.NewPool(cfg.TLS)
 	defer pool.Close()
-	s := &server{cfg: cfg, store: st, pool: pool, meta: meta.NewClient(cfg.MetaAddrs, pool, cfg.ID)}
+	s := &server{cfg: cfg, store: st, pool: pool, meta: meta.NewClient(cfg.MetaAddrs, pool)}
 
 	lis, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return err
 	}
-	gs := grpc.NewServer(
-		grpc.MaxRecvMsgSize(maxChunk+1<<20),
-		grpc.UnaryInterceptor(s.unaryFault),
-		grpc.StreamInterceptor(s.streamFault),
-	)
+	opts := append([]grpc.ServerOption{cfg.TLS.ServerCreds(), grpc.MaxRecvMsgSize(maxChunk + 1<<20)}, rules.Interceptors()...)
+	gs := grpc.NewServer(append(opts, grpc.ChainUnaryInterceptor(s.unaryFault), grpc.ChainStreamInterceptor(s.streamFault))...)
 	vaultv1.RegisterNodeServiceServer(gs, s)
 
 	go s.heartbeatLoop(ctx)
@@ -102,8 +114,8 @@ func (s *server) check(ctx context.Context, method string) error {
 	if f.down {
 		return status.Error(codes.Unavailable, "node is down")
 	}
-	if from := wire.From(ctx); from != "" && slices.Contains(f.partitioned, from) {
-		return status.Errorf(codes.Unavailable, "partitioned from %s", from)
+	if c, ok := wire.Caller(ctx); ok && (slices.Contains(f.partitioned, c.ID) || slices.Contains(f.partitioned, c.Role)) {
+		return status.Errorf(codes.Unavailable, "partitioned from %s", c.ID)
 	}
 	if f.slowMs > 0 {
 		select {
@@ -234,7 +246,7 @@ func (s *server) PushChunk(ctx context.Context, req *vaultv1.PushChunkRequest) (
 	if err != nil {
 		return nil, err
 	}
-	at, err := SendChunk(ctx, s.pool, s.cfg.ID, req.GetTargetAddr(), req.GetSha256(), b)
+	at, err := SendChunk(ctx, s.pool, req.GetTargetAddr(), req.GetSha256(), b)
 	if err != nil {
 		return nil, err
 	}
@@ -242,12 +254,12 @@ func (s *server) PushChunk(ctx context.Context, req *vaultv1.PushChunkRequest) (
 }
 
 // SendChunk streams one chunk to the node at addr and returns its written_at.
-func SendChunk(ctx context.Context, pool *wire.Pool, from, addr, sha string, b []byte) (int64, error) {
+func SendChunk(ctx context.Context, pool *wire.Pool, addr, sha string, b []byte) (int64, error) {
 	conn, err := pool.Get(addr)
 	if err != nil {
 		return 0, status.Error(codes.Unavailable, err.Error())
 	}
-	stream, err := vaultv1.NewNodeServiceClient(conn).PutChunk(wire.WithFrom(ctx, from))
+	stream, err := vaultv1.NewNodeServiceClient(conn).PutChunk(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -273,12 +285,12 @@ func SendChunk(ctx context.Context, pool *wire.Pool, from, addr, sha string, b [
 }
 
 // FetchChunk reads one chunk from the node at addr and verifies its hash.
-func FetchChunk(ctx context.Context, pool *wire.Pool, from, addr, sha string) ([]byte, error) {
+func FetchChunk(ctx context.Context, pool *wire.Pool, addr, sha string) ([]byte, error) {
 	conn, err := pool.Get(addr)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	stream, err := vaultv1.NewNodeServiceClient(conn).GetChunk(wire.WithFrom(ctx, from), &vaultv1.GetChunkRequest{Sha256: sha})
+	stream, err := vaultv1.NewNodeServiceClient(conn).GetChunk(ctx, &vaultv1.GetChunkRequest{Sha256: sha})
 	if err != nil {
 		return nil, err
 	}
