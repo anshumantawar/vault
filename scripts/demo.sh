@@ -15,13 +15,7 @@ CERTS=$DATA/certs
 META=127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003
 PEERS=m1=127.0.0.1:7101,m2=127.0.0.1:7102,m3=127.0.0.1:7103
 
-# The bootstrap admin: generated once, kept in $DATA/admin.env (0600).
 mkdir -p "$DATA"
-if [[ ! -f $DATA/admin.env ]]; then
-  umask 077
-  printf 'VAULT_ACCESS_KEY=%s\nVAULT_SECRET_KEY=%s\n' vaultadmin "$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)" >"$DATA/admin.env"
-fi
-set -a; . "$DATA/admin.env"; set +a
 
 SCHEME=https PLAIN=
 if [[ ${VAULT_PLAIN_HTTP:-} == 1 ]]; then SCHEME=http PLAIN=-plain-http; fi
@@ -56,15 +50,11 @@ case ${1:-} in
     for p in m1 m2 m3 n1 n2 n3 n4 n5 gateway; do start $p; done
     cat <<EOF
 
-UI:  $SCHEME://127.0.0.1:8080   sign in with the admin keys below
+UI:  $SCHEME://127.0.0.1:8080   no sign-in; create S3 keys in the Users app
 S3:  $SCHEME://127.0.0.1:9000   logs in $DATA/logs
 
-Admin keys (also in $DATA/admin.env):
-  access key  $VAULT_ACCESS_KEY
-  secret key  $VAULT_SECRET_KEY
-
 export AWS_ENDPOINT_URL=$SCHEME://127.0.0.1:9000 AWS_CA_BUNDLE=$CERTS/ca.pem AWS_DEFAULT_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=$VAULT_ACCESS_KEY AWS_SECRET_ACCESS_KEY=$VAULT_SECRET_KEY
+export AWS_ACCESS_KEY_ID=<access key> AWS_SECRET_ACCESS_KEY=<secret key>
 aws s3 mb s3://photos
 
 Browsers don't know Vault's private CA. Trust it once (macOS asks for your password):

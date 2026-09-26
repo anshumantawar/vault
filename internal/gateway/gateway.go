@@ -51,8 +51,6 @@ type Gateway struct {
 	nodes atomic.Pointer[[]*vaultv1.Node]
 	users users
 
-	sessionKey []byte // signs UI session cookies
-
 	faultMu sync.Mutex
 	faults  map[string]*vaultv1.SetFaultRequest // UI-issued fault state per node
 
@@ -63,6 +61,14 @@ type Gateway struct {
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.TLS == nil || cfg.TLS.Self.Role != pki.RoleGateway {
 		return errors.New("gateway needs a gateway certificate")
+	}
+	// The bootstrap admin is created once; later starts keep the stored secret.
+	// Without a secret the UI still works; S3 clients use keys from the Users app.
+	if cfg.AccessKey == "" {
+		cfg.AccessKey = "vaultadmin"
+	}
+	if cfg.SecretKey == "" {
+		cfg.SecretKey = rand.Text()
 	}
 	if len(cfg.AccessKey) < 8 || len(cfg.SecretKey) < 16 {
 		return errors.New("admin access key must be ≥ 8 characters and secret ≥ 16")
@@ -77,8 +83,6 @@ func Run(ctx context.Context, cfg Config) error {
 	pool := wire.NewPool(cfg.TLS)
 	defer pool.Close()
 	g := &Gateway{cfg: cfg, pool: pool, meta: meta.NewClient(cfg.MetaAddrs, pool), faults: map[string]*vaultv1.SetFaultRequest{}, hist: &history{}}
-	g.sessionKey = make([]byte, 32)
-	rand.Read(g.sessionKey)
 	g.nodes.Store(&[]*vaultv1.Node{})
 	go g.refreshNodes(ctx)
 	go g.usersLoop(ctx)

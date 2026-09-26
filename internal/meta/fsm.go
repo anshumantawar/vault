@@ -16,6 +16,7 @@ import (
 
 	"github.com/hashicorp/raft"
 	bolt "go.etcd.io/bbolt"
+	berrors "go.etcd.io/bbolt/errors"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -810,7 +811,7 @@ func (f *fsm) restoreLegacy(r io.Reader) error {
 	defer f.mu.Unlock()
 	return f.db.Update(func(bt *bolt.Tx) error {
 		for _, b := range allKeyspaces { // start clean, counters included; Raft replays what follows
-			if err := bt.DeleteBucket(b); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
+			if err := bt.DeleteBucket(b); err != nil && !errors.Is(err, berrors.ErrBucketNotFound) {
 				return err
 			}
 			if _, err := bt.CreateBucket(b); err != nil {

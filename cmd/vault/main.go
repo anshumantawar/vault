@@ -109,10 +109,7 @@ func main() {
 		metaAddrs := fs.String("meta", "127.0.0.1:7001", "meta members' gRPC addresses, comma separated")
 		plain := fs.Bool("plain-http", false, "serve S3 and the UI without TLS (loopback addresses only)")
 		fs.Parse(os.Args[2:])
-		ak, sk := os.Getenv("VAULT_ACCESS_KEY"), os.Getenv("VAULT_SECRET_KEY")
-		if ak == "" || sk == "" {
-			log.Fatal("set VAULT_ACCESS_KEY and VAULT_SECRET_KEY (the bootstrap admin)")
-		}
+		ak, sk := os.Getenv("VAULT_ACCESS_KEY"), os.Getenv("VAULT_SECRET_KEY") // optional bootstrap admin keys
 		err = gateway.Run(ctx, gateway.Config{S3Addr: *s3, UIAddr: *uiAddr, MetaAddrs: split(*metaAddrs), AccessKey: ak, SecretKey: sk, TLS: loadTLS(*id), PlainHTTP: *plain})
 	default:
 		fmt.Fprint(os.Stderr, usage)

@@ -430,58 +430,12 @@ func TestCluster(t *testing.T) {
 		c.mustGet("/alice-bucket/a.bin", data) // admins see every bucket
 	})
 
-	t.Run("UI requires sign-in and admin for chaos", func(t *testing.T) {
-		ui := "https://" + c.ui
-		post := func(path, cookie string) int {
-			req, _ := http.NewRequest("POST", ui+path, nil)
-			if cookie != "" {
-				req.Header.Set("Cookie", cookie)
-			}
-			resp, err := c.client.Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp.Body.Close()
-			return resp.StatusCode
+	t.Run("UI needs no sign-in", func(t *testing.T) {
+		resp, err := c.client.Get("https://" + c.ui + "/app/stats/data?range=60")
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("stats without sign-in: %v %v", resp, err)
 		}
-		login := func(ak, sk string) string {
-			resp, err := c.client.PostForm(ui+"/login", map[string][]string{"access_key": {ak}, "secret_key": {sk}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp.Body.Close()
-			for _, ck := range resp.Cookies() {
-				if ck.Name == sessionCookie {
-					return ck.Name + "=" + ck.Value
-				}
-			}
-			return ""
-		}
-		if resp, err := c.client.Get(ui + "/"); err != nil || resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
-			t.Errorf("anonymous desktop should redirect to /login, got %v %v", resp.StatusCode, err)
-		}
-		if code := post("/ui/nodes/n1/kill", ""); code != http.StatusUnauthorized {
-			t.Errorf("anonymous kill: %d, want 401", code)
-		}
-		if login(testAK, "wrong-secret-000000") != "" {
-			t.Error("wrong secret produced a session")
-		}
-		alice := login("VKALICE0001", "alice-secret-0123456789")
-		if alice == "" {
-			t.Fatal("alice could not sign in")
-		}
-		if code := post("/ui/nodes/n1/kill", alice); code != http.StatusForbidden {
-			t.Errorf("non-admin kill: %d, want 403", code)
-		}
-		admin := login(testAK, testSK)
-		req, _ := http.NewRequest("GET", ui+"/app/stats/data?range=60", nil)
-		req.Header.Set("Cookie", admin)
-		if resp, err := c.client.Do(req); err != nil || resp.StatusCode != 200 {
-			t.Errorf("admin stats: %v %v", resp.StatusCode, err)
-		}
-		if code := post("/ui/nodes/n1/kill", "vault_session=forged.c2lnbmF0dXJl"); code != http.StatusUnauthorized {
-			t.Errorf("forged session: %d, want 401", code)
-		}
+		resp.Body.Close()
 	})
 
 }

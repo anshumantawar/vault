@@ -22,13 +22,8 @@ import (
 // ponytail: bind the UI to localhost only; add auth before exposing it.
 func (g *Gateway) uiHandler() http.Handler {
 	mux := http.NewServeMux()
-	user, admin := g.signedIn, g.adminOnly
-	// public: sign-in only
+	user, admin := g.asAdmin, g.asAdmin
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(ui.Static)))
-	mux.HandleFunc("GET /login", g.loginPage)
-	mux.HandleFunc("POST /login", g.login)
-	mux.HandleFunc("POST /logout", g.logout)
-	// every signed-in user: their own buckets and keys
 	mux.HandleFunc("GET /{$}", user(func(w http.ResponseWriter, r *http.Request) {
 		ui.Desktop(sessionView(sessionUser(r.Context()))).Render(r.Context(), w)
 	}))
@@ -83,32 +78,6 @@ func securityHeaders(h http.Handler) http.Handler {
 
 func sessionView(u *vaultv1.User) ui.Session {
 	return ui.Session{Name: u.GetName(), AccessKey: u.GetAccessKey(), Admin: u.GetAdmin()}
-}
-
-// ---- sign in / out ----
-
-func (g *Gateway) loginPage(w http.ResponseWriter, r *http.Request) {
-	if _, err := g.sessionFrom(r); err == nil {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-	ui.Login("").Render(r.Context(), w)
-}
-
-func (g *Gateway) login(w http.ResponseWriter, r *http.Request) {
-	u := g.checkLogin(r.Context(), strings.TrimSpace(r.FormValue("access_key")), r.FormValue("secret_key"))
-	if u == nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		ui.Login("Those keys don't match a Vault user.").Render(r.Context(), w)
-		return
-	}
-	g.setSession(w, r, u.GetAccessKey())
-	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-func (g *Gateway) logout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 // ---- Users app (admins) ----

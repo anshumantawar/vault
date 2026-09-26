@@ -266,15 +266,6 @@ templ pageHead(title string) {
 				#dock .d-connect .ico { background: linear-gradient(160deg, #4a4a4f, #1d1d20); }
 				#dock .d-present .ico { background: linear-gradient(160deg, #ffb347, #f06a1f); }
 				#dock .d-users .ico { background: linear-gradient(160deg, #8b7bff, #5b4bd6); }
-				#bar .me { gap: 8px; }
-				#bar .me .role { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
-				.login { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; }
-				.login form { width: min(360px, 100%); display: grid; gap: 12px; padding: 28px; border-radius: 16px; box-shadow: var(--shadow);
-					background: color-mix(in srgb, var(--win) 82%, transparent); backdrop-filter: saturate(180%) blur(24px); -webkit-backdrop-filter: saturate(180%) blur(24px); border: 1px solid var(--line); }
-				.login h1 { margin: 4px 0 0; font-size: 22px; }
-				.login label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
-				.login input { font-size: 14px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--win); color: var(--text); }
-				.login .btn { padding: 8px; font-size: 14px; }
 				.secret { display: grid; gap: 6px; padding: 12px; border-radius: 10px; background: var(--soft); border: 1px solid var(--line); }
 				.users-t { width: 100%; border-collapse: collapse; font-size: 12px; }
 				.users-t td, .users-t th { text-align: left; padding: 6px 6px 6px 0; border-bottom: 1px solid var(--line); }
@@ -418,13 +409,6 @@ templ Desktop(me Session) {
 					</span>
 				</span>
 				<span class="item" id="clock"></span>
-				<form class="item me" method="post" action="/logout">
-					<span title={ me.AccessKey }>{ me.Name }</span>
-					if me.Admin {
-						<span class="role">admin</span>
-					}
-					<button class="btn xs" type="submit">Log out</button>
-				</form>
 			</div>
 			<div id="desk"></div>
 			<nav id="dock">
@@ -1433,31 +1417,6 @@ templ ConnectApp(endpoint, accessKey string, https bool) {
 	<p class="muted">You only see and touch your own buckets. Your secret key was shown once, when your account was created; ask an admin for a new user if you lost it.</p>
 }
 
-// Login is the sign-in page: the same access keys as the S3 API.
-templ Login(msg string) {
-	<!DOCTYPE html>
-	<html lang="en">
-		<head>
-			@pageHead("Sign in · Vault")
-		</head>
-		<body>
-			<main class="login">
-				<form method="post" action="/login">
-					@Logo(44, "login")
-					<h1>Sign in to Vault</h1>
-					<p class="muted" style="margin:0">Use your Vault access key and secret key.</p>
-					if msg != "" {
-						<p class="err" role="alert">{ msg }</p>
-					}
-					<label>Access key<input name="access_key" autocomplete="username" required autofocus/></label>
-					<label>Secret key<input name="secret_key" type="password" autocomplete="current-password" required/></label>
-					<button class="btn dark" type="submit">Sign in</button>
-				</form>
-			</main>
-		</body>
-	</html>
-}
-
 // UsersApp lists tenants; a new user's secret is shown exactly once.
 templ UsersApp(users []UserRow, created *NewUser, msg string) {
 	<div class="users" style="display:grid;gap:12px">
@@ -1466,7 +1425,7 @@ templ UsersApp(users []UserRow, created *NewUser, msg string) {
 		}
 		if created != nil {
 			<div class="secret">
-				<b>{ created.Name } can now sign in and use the S3 API.</b>
+				<b>{ created.Name } can now use the S3 API.</b>
 				<span class="muted">Copy the secret now: it will not be shown again.</span>
 				<pre>{ "Access key: " + created.AccessKey + "\nSecret key: " + created.SecretKey }</pre>
 				<div class="row"><button class="btn xs" data-copy={ created.SecretKey }>Copy secret</button></div>

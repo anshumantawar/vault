@@ -1,3 +1,4 @@
 /data/
 /vault
 .playwright-mcp/
+/cover.out

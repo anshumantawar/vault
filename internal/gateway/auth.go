@@ -2,16 +2,10 @@ package gateway
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
-	"errors"
 	"log"
 	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -146,9 +140,6 @@ func newSecret() string {
 // ponytail: the signing key is random per gateway, so a restart logs everyone
 // out and sessions don't move between gateways; share a key if UIs are load-balanced.
 
-const sessionCookie = "vault_session"
-const sessionTTL = 12 * time.Hour
-
 type ctxKey struct{}
 
 func sessionUser(ctx context.Context) *vaultv1.User {
@@ -156,86 +147,15 @@ func sessionUser(ctx context.Context) *vaultv1.User {
 	return u
 }
 
-func (g *Gateway) sign(payload string) string {
-	m := hmac.New(sha256.New, g.sessionKey)
-	m.Write([]byte(payload))
-	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
-}
-
-func (g *Gateway) setSession(w http.ResponseWriter, r *http.Request, accessKey string) {
-	payload := accessKey + "|" + strconv.FormatInt(time.Now().Add(sessionTTL).Unix(), 10)
-	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + g.sign(payload),
-		Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: int(sessionTTL.Seconds()),
-	})
-}
-
-var errNoSession = errors.New("not signed in")
-
-func (g *Gateway) sessionFrom(r *http.Request) (*vaultv1.User, error) {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil {
-		return nil, errNoSession
-	}
-	enc, sig, ok := strings.Cut(c.Value, ".")
-	if !ok {
-		return nil, errNoSession
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(enc)
-	if err != nil || !hmac.Equal([]byte(sig), []byte(g.sign(string(raw)))) {
-		return nil, errNoSession
-	}
-	ak, exp, _ := strings.Cut(string(raw), "|")
-	if t, err := strconv.ParseInt(exp, 10, 64); err != nil || time.Now().Unix() > t {
-		return nil, errNoSession
-	}
-	// Re-check the user on every request, so deleting a user ends their sessions.
-	u := g.user(r.Context(), ak)
-	if u == nil {
-		return nil, errNoSession
-	}
-	return u, nil
-}
-
-// signedIn wraps a UI route: no session → the login page (or 401 for htmx/fetch).
-func (g *Gateway) signedIn(h http.HandlerFunc) http.HandlerFunc {
+// asAdmin wraps a UI route: there is no sign-in, every visitor acts as the bootstrap admin.
+// ponytail: the UI is fully open; bind it to localhost (the default) or put auth in front before exposing it.
+func (g *Gateway) asAdmin(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, err := g.sessionFrom(r)
-		if err != nil {
-			if r.Method == http.MethodGet && r.Header.Get("HX-Request") == "" {
-				http.Redirect(w, r, "/login", http.StatusSeeOther)
-				return
-			}
-			w.Header().Set("HX-Redirect", "/login")
-			http.Error(w, "sign in first", http.StatusUnauthorized)
+		u := g.user(r.Context(), g.cfg.AccessKey)
+		if u == nil {
+			http.Error(w, "cluster starting, retry in a moment", http.StatusServiceUnavailable)
 			return
 		}
 		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, u)))
 	}
-}
-
-// adminOnly wraps cluster-wide and destructive routes: chaos, stats, users, demo.
-func (g *Gateway) adminOnly(h http.HandlerFunc) http.HandlerFunc {
-	return g.signedIn(func(w http.ResponseWriter, r *http.Request) {
-		if !sessionUser(r.Context()).GetAdmin() {
-			http.Error(w, "admins only", http.StatusForbidden)
-			return
-		}
-		h(w, r)
-	})
-}
-
-// checkLogin compares credentials in constant time and slows down failures.
-func (g *Gateway) checkLogin(ctx context.Context, accessKey, secret string) *vaultv1.User {
-	u := g.user(ctx, accessKey)
-	want := ""
-	if u != nil {
-		want = u.GetSecretKey()
-	}
-	if u == nil || subtle.ConstantTimeCompare([]byte(want), []byte(secret)) != 1 {
-		// ponytail: fixed delay per failure; add per-IP lockout if exposed publicly.
-		time.Sleep(400 * time.Millisecond)
-		return nil
-	}
-	return u
 }
